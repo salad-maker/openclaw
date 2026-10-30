@@ -1,7 +1,8 @@
 ---
-summary: "Fixes for silent groups, missing commands, rejected tokens, and unstable polling"
+summary: "Fixes for slow replies, silent groups, missing commands, rejected tokens, and unstable polling"
 read_when:
   - The bot does not reply in a Telegram group
+  - Direct-message replies are slow even for short prompts
   - Commands are missing or the token is rejected at startup
   - Long polling stalls or Telegram API calls fail
 title: "Telegram troubleshooting"
@@ -13,6 +14,63 @@ Symptom-first checks for a Telegram bot that is not behaving.
 ## Troubleshooting
 
 <AccordionGroup>
+  <Accordion title="Direct-message replies are consistently slow">
+
+    Compare `/status` with a short agent prompt such as `Reply only OK`. The
+    command bypasses model generation; it still includes command preparation
+    and Telegram delivery. Use `openclaw logs --follow` to distinguish time
+    before native task start, model time, and outbound delivery. Lowering the
+    thinking level will not remove delays outside the model request.
+
+    For Codex-backed sessions, check whether consecutive turns reuse the same
+    native thread and report cached input. Some restricted turns use a
+    temporary thread while preserving the saved binding. A new thread on every
+    turn can explain why a Telegram DM is slower than a warm local session.
+    See [Codex restricted turns](/plugins/codex-harness-reference/restricted-turns).
+
+    For a trusted private DM, these configuration changes can remove avoidable
+    overhead:
+
+    - Set `messages.visibleReplies` to `"automatic"` so a normal final answer can
+      be delivered without requiring a `message` tool call. This setting applies
+      beyond Telegram; review other conversations that depend on message-tool-only
+      replies before changing it.
+    - Set `messages.inbound.byChannel.telegram` to `0` to remove Telegram's
+      ordinary 300 ms text-batching window. Rapid messages will dispatch
+      separately; automatic long-paste assembly remains enabled.
+
+```bash
+openclaw config set messages.visibleReplies automatic
+openclaw config set messages.inbound.byChannel.telegram 0 --strict-json
+openclaw config validate
+```
+
+    If a sender-specific tool allowlist is causing restricted turns, removing
+    that entry lets the sender inherit the agent's remaining tool policies.
+    Only do this when you intentionally want that access: it can broaden the
+    tools available through the sender's Telegram messages. Review both global
+    and per-agent [requester tool policies](/gateway/config-tools/tool-policy#tools.toolsbysender).
+    Remove only the matching entry; for example, replace the placeholder with
+    the exact configured Telegram sender key:
+
+```bash
+openclaw config unset 'tools.toolsBySender["channel:telegram:123456789"]'
+openclaw config validate
+```
+
+    Record previous values before editing so you can restore them. Compare two
+    consecutive replies after the change; the first may create a new native
+    thread. Confirm successful delivery, thread reuse, and cached input rather
+    than assuming a successful config write improved latency.
+
+    These are configuration workarounds, not a guarantee of faster replies.
+    In one investigation, thread reuse and caching were restored, but live
+    replies still took about five to seven seconds. Disabling the status
+    preview did not demonstrate a reliable improvement. Model latency and
+    delivery overhead can remain after preparation is reduced.
+
+  </Accordion>
+
   <Accordion title="Bot does not respond to non mention group messages">
 
     - If `requireMention=false`, Telegram privacy mode must allow full visibility: BotFather `/setprivacy` -> Disable, then remove + re-add the bot to the group.

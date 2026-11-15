@@ -155,6 +155,8 @@ export async function registerPluginSubagentRunFromGateway(params: {
       requesterDisplayKey: params.requester ? requesterSessionKey : "main",
       task: params.task,
       cleanup: "keep",
+      // Owned SDK readers reconcile cancellation after native cleanup and restart.
+      retainOutcomeOnKeep: params.pluginId ? true : undefined,
       ...(params.pluginId ? { label: `plugin:${params.pluginId}` } : {}),
       expectsCompletionMessage: params.requester !== undefined,
       spawnMode: "run",

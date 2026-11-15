@@ -166,6 +166,12 @@ Start agent work in the background: hook-dispatched turns for external content a
     A terminal row can coexist with pending work. Do not settle a goal, confirm
     cancellation or permit deletion until `ownedWorkPending` is explicitly false.
     Missing run evidence leaves this flag true.
+    Newly admitted plugin runs retain cancelled outcomes under the same
+    `cleanup: "keep"` policy as successful outcomes, including after the native
+    cancellation reconciliation grace. This does not shorten cleanup or make
+    cancellation acknowledgement terminal. Keep-mode rows currently have no
+    automatic archive TTL; explicit native session/registry cleanup can remove
+    them. Existing unmarked rows retain their previous retirement policy.
 
     `subagent.cancelRun({ sessionKey, runId })` uses the existing exact-run abort
     handler and ordinary caller permissions. `acknowledged` means the abort handler

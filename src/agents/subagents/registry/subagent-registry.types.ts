@@ -192,6 +192,8 @@ export type SubagentRunRecord = Omit<SubagentRunReadRecord, "execution" | "colle
   task: string;
   taskName?: string;
   cleanup: "delete" | "keep";
+  /** Host-admitted result reader needs killed outcomes for cleanup:keep, like successful ones. */
+  retainOutcomeOnKeep?: true;
   label?: string;
   agentDir?: string;
   workspaceDir?: string;

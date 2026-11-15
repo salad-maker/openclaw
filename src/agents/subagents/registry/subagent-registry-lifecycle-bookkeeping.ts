@@ -150,11 +150,13 @@ export async function completeCleanupBookkeeping(
     retire: () => retireImmediately,
     mutate: (draft, current) => {
       const suppressSessionEffects = !context.sessionEffectsHostCurrent(current);
-      // Cron reads settled child rows directly; delete rows retire through the archive sweep.
+      // Cron and host-admitted SDK readers need settled rows. Retaining an outcome
+      // changes only row retirement, never kill reconciliation or raw-work cleanup.
       retireAfterSettle =
         !draft.collect &&
         ((isDeleteCleanup && !isCronRunSessionKey(draft.requesterSessionKey)) ||
-          (draft.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
+          ((draft.cleanup !== "keep" || draft.retainOutcomeOnKeep !== true) &&
+            draft.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
             draft.suppressAnnounceReason !== "killed"));
       retireImmediately = retireAfterSettle && cleanupParams.skipRequesterSettleWake === true;
       cleanupParams.finalizeDelivery?.(draft);

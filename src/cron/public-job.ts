@@ -3,6 +3,7 @@ import type { CronJob, CronStoredJob } from "./types.js";
 /** Remove scheduler-only state before a cron job crosses a public API boundary. */
 export function toPublicCronJob(job: CronStoredJob): CronJob {
   const {
+    pluginSchedule: _pluginSchedule,
     operatorSource: _operatorSource,
     inferenceBinding: _inferenceBinding,
     sourceConversation: _sourceConversation,

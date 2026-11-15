@@ -406,6 +406,8 @@ export type CronToolsAllowProvenance =
 
 /** Persisted row shape; public Gateway and wire contracts use CronJob. */
 export type CronStoredJob = CronJob & {
+  /** Immutable host-issued plugin schedule ownership; never accepted from wire input. */
+  pluginSchedule?: { pluginId: string; scope: string; intent: string; definition: string };
   /** Original authenticated source for a same-conversation continuation, never a public grant. */
   operatorSource?: {
     source: import("../gateway/operator-run-recovery-source.js").RestartRecoveryOperatorSource;

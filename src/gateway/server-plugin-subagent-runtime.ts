@@ -205,6 +205,17 @@ export function createGatewaySubagentRuntime(
   };
 
   const subagentRuntime: PluginRuntime["subagent"] = {
+    async getRun(params) {
+      const { withPluginOwnedRun } = await import("./server-plugin-subagent-owned-run.js");
+      return withPluginOwnedRun(
+        { ...params, resolveGatewayContext, runtimeLifetime },
+        async ({ observation }) => observation,
+      );
+    },
+    async cancelRun(params) {
+      const { cancelPluginOwnedRun } = await import("./server-plugin-subagent-owned-run.js");
+      return cancelPluginOwnedRun({ ...params, resolveGatewayContext, runtimeLifetime });
+    },
     async forkSession(request) {
       const params = { ...request };
       const scope = getPluginRuntimeGatewayRequestScope();
@@ -480,6 +491,14 @@ export function createGatewaySubagentRuntime(
     },
     async run(request) {
       const params = { ...request };
+      if (
+        params.timeoutSeconds !== undefined &&
+        (!Number.isInteger(params.timeoutSeconds) ||
+          params.timeoutSeconds < 1 ||
+          params.timeoutSeconds > 300)
+      ) {
+        throw new Error("Plugin subagent timeoutSeconds must be an integer between 1 and 300.");
+      }
       const assertCurrent = params.assertCurrent;
       assertCurrent?.();
       if (params.disableTools === true && (params.toolsAlsoAllow?.length ?? 0) > 0) {
@@ -566,6 +585,7 @@ export function createGatewaySubagentRuntime(
           ...(params.lightContext === true && { bootstrapContextMode: "lightweight" }),
           // The Gateway agent schema requires a nonempty idempotency key.
           idempotencyKey: params.idempotencyKey || randomUUID(),
+          ...(params.timeoutSeconds !== undefined ? { timeout: params.timeoutSeconds } : {}),
         },
         {
           allowSyntheticModelOverride,

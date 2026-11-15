@@ -12,6 +12,7 @@ import {
   withPluginRuntimeRegistryScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
+import { bindPluginScheduleSource } from "../plugins/tool-schedules.js";
 import type { OpenClawPluginToolDelivery } from "../plugins/tool-types.js";
 import { resolvePluginTools, resolvePluginToolsSteps } from "../plugins/tools.js";
 import type { OpenClawPluginToolContext } from "../plugins/types.js";
@@ -370,6 +371,18 @@ function* resolveOpenClawPluginToolSteps(
         }
       : {}),
   };
+  bindPluginScheduleSource(resolution.context, {
+    agentSessionKey: params.options?.runSessionKey ?? params.options?.agentSessionKey,
+    agentId: pluginToolInputs.context.agentId,
+    agentAccountId: pluginToolInputs.context.agentAccountId,
+    config: availabilityConfig,
+    runId: params.options?.runId,
+    creatorToolAllowlist: params.options?.cronCreatorToolAllowlist,
+    creatorToolAllowlistCaptureRef: params.options?.cronCreatorToolAllowlistCaptureRef,
+    resolveCreatorToolAuthority: params.options?.resolveCronCreatorToolAuthority,
+    creatorAuthorityUnavailableReason: params.options?.cronCreatorAuthorityUnavailableReason,
+    selfRemoveOnlyJobId: params.options?.cronSelfRemoveOnlyJobId,
+  });
   const pluginTools = captureAgentWorkspaceReadiness(pluginToolInputs.context.sessionKey)
     ? yield* resolvePluginToolsSteps(resolution)
     : resolvePluginTools(resolution);

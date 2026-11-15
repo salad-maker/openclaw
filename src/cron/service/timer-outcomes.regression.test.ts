@@ -18,6 +18,47 @@ import { runPostPersistCronNotifications } from "./store.js";
 import { applyJobResult } from "./timer-outcomes.js";
 import { onTimer, runMissedJobs } from "./timer.test-support.js";
 
+it("never automatically retries a plugin-owned one-shot even after a transient provider failure", () => {
+  const startedAt = Date.now(),
+    endedAt = startedAt + 500;
+  const job = {
+    ...createIsolatedRegressionJob({
+      id: "plugin-single-attempt",
+      name: "plugin",
+      scheduledAt: startedAt,
+      schedule: { kind: "at" as const, at: new Date(startedAt).toISOString() },
+      payload: { kind: "agentTurn" as const, message: "ping", toolsAllow: [] },
+      state: { runningAtMs: startedAt },
+    }),
+    pluginSchedule: {
+      pluginId: "coordination",
+      scope: "scope",
+      intent: "intent",
+      definition: "definition",
+    },
+  };
+  const state = createCronServiceStateWithJobs({
+    storePath: "/tmp/plugin-single-attempt.json",
+    log: noopLogger,
+    nowMs: () => endedAt,
+    jobs: [job],
+  });
+  applyJobResult(
+    state,
+    job,
+    {
+      status: "error",
+      error: "stream disconnected before completion: upstream reset",
+      executionStarted: true,
+      startedAt,
+      endedAt,
+    },
+    { deferredNotifications: [] },
+  );
+  expect(job.enabled).toBe(false);
+  expect(job.state.nextRunAtMs).toBeUndefined();
+});
+
 const timerRegressionFixtures = setupCronRegressionFixtures({
   prefix: "cron-service-timer-outcomes-regressions-",
 });

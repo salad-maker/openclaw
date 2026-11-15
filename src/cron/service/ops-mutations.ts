@@ -124,6 +124,7 @@ export async function add(
         ? (state.store?.jobs.filter(opts.matchesExisting).map((job) => job.id) ?? [])
         : undefined,
       options: {
+        pluginSchedule: opts?.pluginSchedule,
         enabledExplicit: opts?.enabledExplicit,
         systemOwned: opts?.systemOwned,
         createdActor: opts?.createdActor,

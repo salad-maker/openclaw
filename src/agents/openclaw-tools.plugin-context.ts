@@ -45,6 +45,11 @@ export type OpenClawPluginToolOptions = Pick<
   | "sandboxed"
   | "allowGatewaySubagentBinding"
   | "toolBindings"
+  | "cronCreatorToolAllowlist"
+  | "cronCreatorToolAllowlistCaptureRef"
+  | "resolveCronCreatorToolAuthority"
+  | "cronCreatorAuthorityUnavailableReason"
+  | "cronSelfRemoveOnlyJobId"
 > & { activeProjectKeys?: readonly string[] };
 
 export function resolveOpenClawPluginToolInputs(params: {

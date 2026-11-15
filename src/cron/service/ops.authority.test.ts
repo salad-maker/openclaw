@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import { pluginScheduleDefinition } from "../plugin-schedule-definition.js";
 import { toPublicCronJob } from "../public-job.js";
 import { readCronJobScratchState } from "../scratch-store.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
@@ -31,6 +32,26 @@ function requireDeclarativeAddResult(result: CronAddResult) {
 }
 
 describe("scheduled tool policy provenance", () => {
+  it("persists immutable plugin ownership at creation and keeps it private across reload and edits", async () => {
+    const { storePath } = await makeStorePath();
+    const state = createOkIsolatedCronState({ storePath, now: Date.now() });
+    const ownership = {
+      pluginId: "coordination",
+      scope: "scope",
+      intent: "intent",
+      definition: "",
+    };
+    const job = await add(state, jobInput, { pluginSchedule: ownership });
+    expect(job.pluginSchedule).toEqual({ ...ownership, definition: pluginScheduleDefinition(job) });
+    const stored = (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id)!;
+    expect(stored.pluginSchedule).toEqual(job.pluginSchedule);
+    expect(toPublicCronJob(stored)).not.toHaveProperty("pluginSchedule");
+    const edited = await update(state, job.id, {
+      payload: { kind: "agentTurn", model: "other/model" },
+    });
+    expect(edited.pluginSchedule).toEqual(job.pluginSchedule);
+    expect(pluginScheduleDefinition(edited)).not.toBe(job.pluginSchedule!.definition);
+  });
   it("retains a continuation source privately until an executable edit retires it", async () => {
     const { storePath } = await makeStorePath();
     const state = createOkIsolatedCronState({ storePath, now: Date.now() });

@@ -456,6 +456,7 @@ export type CronListResult = CronJob[];
 export type CronAddInput = CronJobCreate;
 /** Caller-specific declaration-key visibility and explicit enablement metadata. */
 export type CronAddOptions = {
+  pluginSchedule?: CronStoredJob["pluginSchedule"];
   operatorSource?: NonNullable<CronStoredJob["operatorSource"]>["source"];
   inferenceBinding?: CronStoredJob["inferenceBinding"];
   sourceConversation?: CronStoredJob["sourceConversation"];

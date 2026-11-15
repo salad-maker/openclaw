@@ -266,6 +266,9 @@ export async function buildAgentSessionPatch(
     ? buildMainSessionRecoveryClearPatch(params.freshEntry)
     : {};
   const patch: Partial<SessionEntry> = {
+    // Plugin subagents enter through agent RPC rather than sessions.create. Capture
+    // their original incarnation before registration; never adopt legacy rows.
+    ...(params.freshEntry === undefined ? { lifecycleRevision: randomUUID() } : {}),
     ...(automaticResetReason && !freshSessionRotatedSinceLoad && params.freshEntry
       ? {
           ...clearRotatedSessionMetadata(params.freshEntry),

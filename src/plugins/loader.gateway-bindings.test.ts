@@ -37,6 +37,7 @@ import {
 import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
+  getPluginRuntimeGatewayRequestScope,
 } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import * as sdkAlias from "./sdk-alias.js";
@@ -68,7 +69,9 @@ it.each([
       async execute() {
         const { nodes } = await api.runtime.nodes.list();
         const { messages } = await api.runtime.subagent.getSessionMessages({ sessionKey: "probe" });
-        return { content: [], details: { nodes: nodes.map(node => node.nodeId), messages } };
+        const observed = await api.runtime.subagent.getRun({ sessionKey: "probe", runId: "run-probe" });
+        const cancelled = await api.runtime.subagent.cancelRun({ sessionKey: "probe", runId: "run-probe" });
+        return { content: [], details: { nodes: nodes.map(node => node.nodeId), messages, observed, cancelled } };
       },
     });`,
   });
@@ -92,6 +95,14 @@ it.each([
         forkSession: vi.fn<PluginRuntime["subagent"]["forkSession"]>(),
         run: vi.fn<PluginRuntime["subagent"]["run"]>(),
         waitForRun: vi.fn<PluginRuntime["subagent"]["waitForRun"]>(),
+        getRun: async () => {
+          expect(getPluginRuntimeGatewayRequestScope()?.pluginId).toBe(plugin.id);
+          return { runId: owner, sessionKey: "probe", status: "unknown", ownedWorkPending: true };
+        },
+        cancelRun: async () => {
+          expect(getPluginRuntimeGatewayRequestScope()?.pluginId).toBe(plugin.id);
+          return { runId: owner, sessionKey: "probe", status: "acknowledged" };
+        },
         getSessionMessages: async () => ({ messages: [owner] }),
         deleteSession: vi.fn<PluginRuntime["subagent"]["deleteSession"]>(),
       },
@@ -152,7 +163,14 @@ it.each([
     const donor = createDonor("gateway-a");
     setActivePluginRegistry(donor.registry, "gateway-a", "gateway-bindable");
     const registry = await loadAndActivateRootPluginRegistry(options);
-    const expected = { details: { nodes: ["gateway-a"], messages: ["gateway-a"] } };
+    const expected = {
+      details: {
+        nodes: ["gateway-a"],
+        messages: ["gateway-a"],
+        observed: { runId: "gateway-a" },
+        cancelled: { runId: "gateway-a" },
+      },
+    };
     expect(await read(registry)).toMatchObject(expected);
     expect(getActivePluginRegistry()).toBe(registry);
     expect(await loadAndActivateRootPluginRegistry(options)).toBe(registry);
@@ -177,6 +195,8 @@ it.each([
       details: {
         nodes: [explicit.nodes ? "explicit" : owner],
         messages: [explicit.subagent ? "explicit" : owner],
+        observed: { runId: explicit.subagent ? "explicit" : owner },
+        cancelled: { runId: explicit.subagent ? "explicit" : owner },
       },
     });
     expect(donor.reads.nodes.mock.calls.length > 0).toBe(!explicit.nodes);

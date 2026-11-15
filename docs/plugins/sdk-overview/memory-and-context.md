@@ -32,6 +32,29 @@ rebuild earlier history. Without the full contract, OpenClaw uses the legacy
 context path for the whole logical turn and its retries, leaves the configured
 engine unchanged, and tries that engine again on the next logical turn.
 
+## Caller-bound tool memory search
+
+Admitted V2 plugin tools can use the optional `context.memory.search(...)` capability.
+Register with `contextVersion: 2`; legacy factories do not receive this capability.
+The host captures the current agent, session, sandbox state, memory audience and
+active project keys when constructing the tool context; the plugin supplies only
+`{ query, maxResults?, minScore? }` and an optional `AbortSignal`. There is no
+caller-selected owner, agent, project, corpus or operator-authority parameter.
+
+The capability is absent when the host cannot supply a session, audience or
+active project. Each call acquires and releases a native memory-provider lease,
+searches only the `memory` source and requires `projectFilter` support. A missing
+or incompatible provider fails explicitly. Host audience and invocation currency
+are checked before and after asynchronous work; a revoked caller receives no
+result. Search accepts a nonempty query of at most 2,000 characters, between one
+and eight results (default four), and an optional score from zero to one.
+
+Results retain provider references and citation provenance. Treat excerpts as
+untrusted reference data, limit the text passed to a model, and retain only the
+metadata needed for your feature. The capability grants neither arbitrary
+reference retrieval nor memory mutation or deletion. Deleting a plugin's own
+reference record does not delete the provider's source content.
+
 ## Memory embedding adapters
 
 - `registerMemoryCapability` is the exclusive memory-plugin API.

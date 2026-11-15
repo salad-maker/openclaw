@@ -28,6 +28,10 @@ import type {
 } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  capturePluginScheduleAuthority,
+  pluginScheduleId,
+} from "../../plugins/plugin-schedule-authority.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
 import { isRecord } from "../../utils.js";
 import { getCronManagementAuthority } from "../cron-creator-authority-grant.js";
@@ -168,7 +172,12 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     let creatorOptions: Awaited<ReturnType<typeof captureCronCreatorSession>> | undefined;
+    const pluginSchedule = capturePluginScheduleAuthority();
+    if (pluginSchedule) {
+      jobCreate.id = pluginScheduleId(pluginSchedule.ownership);
+    }
     const commitGuard = () => {
+      pluginSchedule?.assertCurrent();
       assertMutationCurrent?.();
       capture?.assertCurrent();
       creatorOptions?.assertCreatorCurrent?.();
@@ -201,6 +210,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         job: { ...jobCreate, sourceConversation: creatorOptions.sourceConversation },
       });
       result = await context.cron.add(jobCreate, {
+        ...(pluginSchedule ? { pluginSchedule: pluginSchedule.ownership } : {}),
         enabledExplicit,
         ...creatorOptions,
         commitGuard,

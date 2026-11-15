@@ -145,6 +145,8 @@ export function holdsFailureNotificationForRetry(
 }
 
 export function resolveTransientCronRetryDecision(params: {
+  /** Host-owned narrower attempt budget; omitted retains the native default. */
+  maxTransientRetries?: number;
   error: string | undefined;
   errorClassification?: CronRunErrorClassification;
   lastErrorReason?: CronJob["state"]["lastErrorReason"];
@@ -183,7 +185,8 @@ export function resolveTransientCronRetryDecision(params: {
       reason: "permanent error",
     };
   }
-  if (consecutiveErrors > DEFAULT_MAX_TRANSIENT_RETRIES) {
+  const retryLimit = params.maxTransientRetries ?? DEFAULT_MAX_TRANSIENT_RETRIES;
+  if (retryLimit === 0 || consecutiveErrors > retryLimit) {
     return {
       retryable: false,
       consecutiveErrors,

@@ -4,6 +4,7 @@ import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-con
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
+import { pluginScheduleDefinition } from "../plugin-schedule-definition.js";
 import { declarativeFields } from "../service/jobs-declarative.js";
 import { cloneCronJobForMutation, finalizeUpdatedJob } from "../service/jobs-mutation.js";
 import { recomputeSingleJobForMaintenance } from "../service/jobs-scheduling.js";
@@ -125,6 +126,12 @@ export function planCronJobMutation(
         );
         if (options.createdActor) {
           nextJob.createdActor = structuredClone(options.createdActor);
+        }
+        if (options.pluginSchedule) {
+          nextJob.pluginSchedule = {
+            ...structuredClone(options.pluginSchedule),
+            definition: pluginScheduleDefinition(nextJob),
+          };
         }
         if (options.sourceConversation) {
           nextJob.sourceConversation = structuredClone(options.sourceConversation);

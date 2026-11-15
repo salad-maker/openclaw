@@ -2110,6 +2110,7 @@ describe("loadGatewayPlugins", () => {
         message: "dream task",
         deliver: false,
         disableTools: true,
+        timeoutSeconds: 300,
       }),
     );
 
@@ -2120,7 +2121,24 @@ describe("loadGatewayPlugins", () => {
     expect(request.internal.pluginSubagentToolsAllow).toEqual([]);
     expect(request.params).not.toHaveProperty("disableTools");
     expect(request.params).not.toHaveProperty("toolsAllow");
+    expect(request.params.timeout).toBe(300);
+    expect(request.params).not.toHaveProperty("timeoutSeconds");
   });
+
+  test.each([0, -1, 301, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    "rejects unbounded or invalid plugin subagent deadline %s before dispatch",
+    async (timeoutSeconds) => {
+      const runtime = await createSubagentRuntime();
+      await expect(
+        runtime.run({
+          sessionKey: "agent:main:subagent:deadline",
+          message: "bounded",
+          timeoutSeconds,
+        }),
+      ).rejects.toThrow("between 1 and 300");
+      expect(handleGatewayRequest).not.toHaveBeenCalled();
+    },
+  );
 
   test.each<{ name: string; result: AgentWaitResult; expected?: AgentWaitResult }>([
     {

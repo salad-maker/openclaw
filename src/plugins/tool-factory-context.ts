@@ -2,6 +2,8 @@ import { assertMemoryAudienceSession } from "./memory-audience.js";
 import { resolveMemoryCapabilityRegistration } from "./memory-state.js";
 import { capturePluginLifecycleAuthority } from "./registry-lifecycle.js";
 import type { PluginRegistry, PluginToolRegistration } from "./registry-types.js";
+import { createPluginToolMemory } from "./tool-memory.js";
+import { createPluginToolSchedules } from "./tool-schedules.js";
 import type { OpenClawPluginToolContext } from "./tool-types.js";
 
 /** Host-only identity binding; registration opt-in never creates this authority. */
@@ -47,7 +49,7 @@ export function createPluginToolFactoryContext(params: {
     continuation?.assertCurrent();
     assertMemoryAudienceCurrent?.();
   };
-  return {
+  const boundContext: OpenClawPluginToolContext<2> = {
     ...context,
     ...(continuation
       ? {
@@ -60,5 +62,14 @@ export function createPluginToolFactoryContext(params: {
       return continuation ? continuation.isCurrent() : context.senderIsOwner;
     },
     assertInvocationCurrent,
+    memory:
+      entry.contextVersion === 2
+        ? createPluginToolMemory(context, assertInvocationCurrent)
+        : undefined,
   };
+  boundContext.schedules =
+    entry.contextVersion === 2
+      ? createPluginToolSchedules(context, boundContext, entry.pluginId, assertInvocationCurrent)
+      : undefined;
+  return boundContext;
 }

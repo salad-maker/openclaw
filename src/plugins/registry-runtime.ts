@@ -594,6 +594,18 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             });
           },
           waitForRun: (params) => runWithPluginScope(() => subagent.waitForRun(params)),
+          ...(subagent.getRun
+            ? {
+                getRun: (params: Parameters<NonNullable<typeof subagent.getRun>>[0]) =>
+                  runWithPluginScope(() => subagent.getRun!(params)),
+              }
+            : {}),
+          ...(subagent.cancelRun
+            ? {
+                cancelRun: (params: Parameters<NonNullable<typeof subagent.cancelRun>>[0]) =>
+                  runWithPluginScope(() => subagent.cancelRun!(params)),
+              }
+            : {}),
           getSessionMessages: (params) =>
             runWithPluginScope(() => subagent.getSessionMessages(params)),
           deleteSession: async (params) => {

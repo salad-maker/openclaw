@@ -7,7 +7,7 @@ import { resolveCronRunErrorReason } from "../run-error-reason.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { computeNextRunAtMs } from "../schedule.js";
 import type { CronRunFinalizationOutcome } from "../store/runtime-worker.types.js";
-import type { CronJob, CronRunStatus, CronTriggerEvalOutcome } from "../types.js";
+import type { CronJob, CronStoredJob, CronRunStatus, CronTriggerEvalOutcome } from "../types.js";
 import { autoDisableCronJob, maybeAutoDisableCronJobAfterRunFailure } from "./auto-disable.js";
 import {
   finalizeCronFailureNotifications,
@@ -328,6 +328,7 @@ export function applyJobResult(
         job.state.nextRunAtMs = undefined;
       } else if (result.status === "error") {
         const retryDecision = resolveTransientCronRetryDecision({
+          ...((job as CronStoredJob).pluginSchedule ? { maxTransientRetries: 0 } : {}),
           error: result.error,
           errorClassification: result.errorClassification,
           lastErrorReason: job.state.lastErrorReason,

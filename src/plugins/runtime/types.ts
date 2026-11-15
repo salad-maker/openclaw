@@ -38,6 +38,8 @@ type SubagentRunParams = {
   /** Deliver the completion to the authenticated requester of the current hook invocation. */
   completionDelivery?: "current-requester";
   idempotencyKey?: string;
+  /** Native execution deadline in whole seconds, bounded to 1..300. */
+  timeoutSeconds?: number;
   cwd?: string;
 };
 
@@ -70,6 +72,26 @@ type SubagentRunResult = {
 type SubagentWaitParams = {
   runId: string;
   timeoutMs?: number;
+};
+
+type SubagentOwnedRunParams = {
+  sessionKey: string;
+  runId: string;
+};
+
+type SubagentOwnedRunObservation = {
+  runId: string;
+  sessionKey: string;
+  /** Persisted native evidence, never inferred from an idle session or a wait timeout. */
+  status: "unknown" | "queued" | "running" | "interrupted" | "terminal";
+  /** Terminal outcome does not imply owned execution/cleanup has settled. Missing evidence stays pending. */
+  ownedWorkPending: boolean;
+  createdAt?: number;
+  startedAt?: number;
+  endedAt?: number;
+  outcome?: "ok" | "error" | "timeout" | "unknown" | "cancelled";
+  error?: string;
+  result?: { text: string; capturedAt: number; source: "native-subagent-completion" };
 };
 
 type SubagentGetSessionMessagesParams = {
@@ -206,6 +228,14 @@ export type PluginRuntime = PluginRuntimeCore & {
     }) => Promise<{ text: string; usage?: LlmCompleteUsage }>;
     run: (params: SubagentRunParams) => Promise<SubagentRunResult>;
     waitForRun: (params: SubagentWaitParams) => Promise<AgentWaitResult>;
+    /** Read retained native evidence for an exact run in this plugin's owned session. */
+    getRun?: (params: SubagentOwnedRunParams) => Promise<SubagentOwnedRunObservation>;
+    /** Request exact owned-run cancellation; acknowledgement is not proof of termination. */
+    cancelRun?: (params: SubagentOwnedRunParams) => Promise<{
+      runId: string;
+      sessionKey: string;
+      status: "acknowledged" | "not-active";
+    }>;
     getSessionMessages: (
       params: SubagentGetSessionMessagesParams,
     ) => Promise<SubagentGetSessionMessagesResult>;

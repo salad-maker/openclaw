@@ -16,6 +16,7 @@ import type {
   CronToolsAllowExecTarget,
   CronToolsAllowProvenance,
 } from "../../cron/types.js";
+import { capturePluginScheduleAuthority } from "../../plugins/plugin-schedule-authority.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
@@ -79,6 +80,7 @@ export function resolveCronMutationCommitGuard(
     "sessionMutationCommitGuard" | "hasCurrentClientAuthority"
   >,
 ): (() => void) | undefined {
+  const pluginSchedule = capturePluginScheduleAuthority();
   const validatesAuthority =
     client?.internal?.agentRuntimeIdentity && context.validateAgentRuntimeApprovalAuthority;
   const identity = client?.internal?.agentRuntimeIdentity;
@@ -97,12 +99,14 @@ export function resolveCronMutationCommitGuard(
     !manageAll &&
     !requesterGrant &&
     !callerAuthority?.sessionMutationCommitGuard &&
+    !pluginSchedule &&
     !callerAuthority?.hasCurrentClientAuthority
   ) {
     return undefined;
   }
   let consumedRequester: ReturnType<typeof consumeCronCreatorAuthorityGrant> | undefined;
   return bindGatewayDeviceRevocation(() => {
+    pluginSchedule?.assertCurrent();
     callerAuthority?.sessionMutationCommitGuard?.();
     if (callerAuthority?.hasCurrentClientAuthority?.() === false) {
       throw new TypeError("Gateway caller authority is no longer active.");

@@ -649,7 +649,23 @@ export type SessionProfileInvolvement = {
   lastMention?: { generation: string; sequence: number; timestamp: number };
 };
 
+/** One native scoped task owns one execution; a claimed task is never replayed. */
+export type PluginScopedTaskExecution = {
+  version: 1;
+  intentSha256: string;
+  scopeSha256: string;
+  requestSha256: string;
+  runId: string;
+  maxToolCalls: number;
+  timeoutSeconds: number;
+  tools: string[];
+  /** Persisted before model/tool execution; deliberately survives errors and restarts. */
+  executionStartedAt?: number;
+};
+
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /** Native-only task ownership/budget. Public session edits cannot create or clear it. */
+  pluginScopedTask?: PluginScopedTaskExecution;
   /** Personal discovery state, never participation, attribution, or sharing authority. */
   profileInvolvement?: { key: string; profiles: Record<string, SessionProfileInvolvement> };
   /** Transcript-wide account provenance; native binding replacement must not replace it. */

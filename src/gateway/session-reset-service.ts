@@ -281,7 +281,7 @@ async function performPreparedGatewaySessionReset({
   worktreeContext: ReturnType<typeof captureWorktreeRunEndContext>;
   worktreeEnv: NodeJS.ProcessEnv;
   lookup: Parameters<typeof withGatewaySessionEntryReadOnly>[0];
-  initialResetEntry: SessionEntry | undefined;
+  initialResetEntry: InternalSessionEntry | undefined;
 }): ReturnType<typeof performGatewaySessionReset> {
   const memory = getSessionActorStorageBinding({
     sessionKey: resetTarget.target.canonicalKey,
@@ -325,15 +325,20 @@ async function performPreparedGatewaySessionReset({
         ? authorizeResetCreation()
         : undefined;
   const resolveResetOwnershipError = (
-    entry: SessionEntry | undefined,
+    entry: InternalSessionEntry | undefined,
     key = resetTarget.target.canonicalKey,
   ) =>
-    resolvePluginSessionOwnershipError({
-      action: "reset",
-      entry,
-      key,
-      pluginOwnerId: params.authorizedPluginId,
-    });
+    entry?.pluginScopedTask
+      ? errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "Scoped task sessions cannot be reset; retain their immutable execution claim and create a new task intent.",
+        )
+      : resolvePluginSessionOwnershipError({
+          action: "reset",
+          entry,
+          key,
+          pluginOwnerId: params.authorizedPluginId,
+        });
   const resolveResetHarnessError = (entry: SessionEntry | undefined) => {
     const message = resolveMissingAgentHarnessSessionError(resetTarget.target.canonicalKey, entry);
     return message ? errorShape(ErrorCodes.INVALID_REQUEST, message) : undefined;
@@ -347,8 +352,10 @@ async function performPreparedGatewaySessionReset({
       ? missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] })
       : undefined;
   };
-  const resolveResetEntryAccessError = (entry: SessionEntry | undefined, canonicalKey: string) =>
-    resolveFastModeSelectionError(entry) ?? resolveResetOwnershipError(entry, canonicalKey);
+  const resolveResetEntryAccessError = (
+    entry: InternalSessionEntry | undefined,
+    canonicalKey: string,
+  ) => resolveFastModeSelectionError(entry) ?? resolveResetOwnershipError(entry, canonicalKey);
   const initialEntryError =
     resolveResetCreationError(initialResetEntry) ??
     resolveResetOwnershipError(initialResetEntry) ??

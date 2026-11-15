@@ -4,6 +4,7 @@ import { capturePluginLifecycleAuthority } from "./registry-lifecycle.js";
 import type { PluginRegistry, PluginToolRegistration } from "./registry-types.js";
 import { createPluginToolMemory } from "./tool-memory.js";
 import { createPluginToolSchedules } from "./tool-schedules.js";
+import { createPluginToolScopedTasks } from "./tool-scoped-tasks.js";
 import type { OpenClawPluginToolContext } from "./tool-types.js";
 
 /** Host-only identity binding; registration opt-in never creates this authority. */
@@ -70,6 +71,10 @@ export function createPluginToolFactoryContext(params: {
   boundContext.schedules =
     entry.contextVersion === 2
       ? createPluginToolSchedules(context, boundContext, entry.pluginId, assertInvocationCurrent)
+      : undefined;
+  boundContext.scopedTasks =
+    entry.contextVersion === 2
+      ? createPluginToolScopedTasks(context, boundContext, assertInvocationCurrent, entry.pluginId)
       : undefined;
   return boundContext;
 }

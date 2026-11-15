@@ -16,7 +16,7 @@ import {
   copyAgentToolMetadata,
 } from "./agent-tool-metadata.js";
 import { createCodingToolsGatewayCaller, sessionEventToolNames } from "./agent-tools.caller.js";
-import { registerOneShotExecScopeCleanup } from "./agent-tools.exec-scope-cleanup.js";
+import { prepareOneShotExecScope } from "./agent-tools.exec-scope-cleanup.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import {
   assertMemoryFlushPersistenceToolAvailable,
@@ -35,9 +35,12 @@ import {
   mergeAgentRingZeroTools,
 } from "./agent-tools.ring-zero-context.js";
 import { runtimeToolAllowlistIncludesMessage } from "./agent-tools.runtime-allowlist.js";
+import {
+  restrictScopedTaskToolConstruction,
+  type PreparedCoreToolSurface,
+} from "./agent-tools.scoped-task.js";
 import { resolveTurnToolSurface } from "./agent-tools.turn-authority.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
-import { resolveProcessToolScopeKey } from "./bash-process-scope.js";
 import { listChannelAgentTools } from "./channel-tools.js";
 import {
   prepareConversationCapabilityProfile,
@@ -96,16 +99,18 @@ export { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js"
 
 // Both SDK paths assemble the same options; only compatibility resolves delegate policy synchronously.
 function* assembleOpenClawCodingTools(
-  options?: InternalCodingToolsOptions,
-  skillReadResources?: SkillSnapshot["resolvedSkills"],
+  inputOptions?: InternalCodingToolsOptions,
+  inputSkillReadResources?: SkillSnapshot["resolvedSkills"],
   onPolicyFilter?: (event: ToolPolicyFilterEvent) => void,
-  preparedSurface?: { tools: AnyAgentTool[]; policy: ReturnType<typeof prepareCoreToolPolicy> },
+  inputPreparedSurface?: PreparedCoreToolSurface,
 ): Generator<
   | OpenClawToolsOptions
   | { pluginTools: Parameters<typeof resolveOpenClawPluginToolsForOptions>[0] },
   AnyAgentTool[],
   AnyAgentTool[]
 > {
+  const { options, skillReadResources, preparedSurface, scopedTask } =
+    restrictScopedTaskToolConstruction(inputOptions, inputSkillReadResources, inputPreparedSurface);
   const preparedTools = preparedSurface?.tools;
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
   const { isMemoryFlushRun, memoryFlush, memoryFlushWritePath } =
@@ -161,18 +166,12 @@ function* assembleOpenClawCodingTools(
   ];
   const sandboxWorkspaceMediaReadAllowed = isConversationToolAllowed(capabilityProfile, "read");
   // Borrowed tool restrictions do not transfer ownership of the policy session's processes.
-  const scopeKey = resolveProcessToolScopeKey({
-    scopeKey: options?.exec?.scopeKey,
-    sessionKey: executionSessionKey,
-    sessionId: options?.sessionId,
-    agentId: executionAgentId,
-  });
-  registerOneShotExecScopeCleanup(options, scopeKey);
+  const scopeKey = prepareOneShotExecScope(options, executionSessionKey, executionAgentId);
   options?.recordToolPrepStage?.("tool-policy");
   const execConfig = resolveExecToolConfig({ cfg: options?.config, agentId });
   const execRuntimeConfig = options?.exec?.config ?? options?.config;
   const preparedRunEnvironment =
-    preparedTools === undefined && execRuntimeConfig && executionAgentId
+    !scopedTask && preparedTools === undefined && execRuntimeConfig && executionAgentId
       ? prepareGitHubToolEnvironment({
           config: execRuntimeConfig,
           sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig,
@@ -672,7 +671,7 @@ export async function createOpenClawCodingToolsInternalAsync(
   options?: InternalCodingToolsOptions,
   skillReadResources?: SkillSnapshot["resolvedSkills"],
   onPolicyFilter?: (event: ToolPolicyFilterEvent) => void,
-  preparedSurface?: { tools: AnyAgentTool[]; policy: ReturnType<typeof prepareCoreToolPolicy> },
+  preparedSurface?: PreparedCoreToolSurface,
   preparation: ToolConstructionPreparationOptions = {},
 ): Promise<AnyAgentTool[]> {
   return withPreparedToolConstruction(

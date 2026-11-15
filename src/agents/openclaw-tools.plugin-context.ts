@@ -50,6 +50,11 @@ export type OpenClawPluginToolOptions = Pick<
   | "resolveCronCreatorToolAuthority"
   | "cronCreatorAuthorityUnavailableReason"
   | "cronSelfRemoveOnlyJobId"
+  | "inheritedToolDenylist"
+  | "inheritedToolPolicySource"
+  | "requesterToolDenylist"
+  | "readDelegationConfig"
+  | "sessionPermissionPolicy"
 > & { activeProjectKeys?: readonly string[] };
 
 export function resolveOpenClawPluginToolInputs(params: {

@@ -11,16 +11,27 @@ import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js"
 
 const executionBudgetContext = resolveGlobalSingleton(
   Symbol.for("openclaw.agentToolExecutionBudgetContext"),
-  () => new AsyncLocalStorage<{ admit: () => void; assertCurrent: () => void }>(),
+  () =>
+    new AsyncLocalStorage<{
+      admit: (toolName?: string) => void;
+      allowedToolNames?: ReadonlySet<string>;
+      assertCurrent: () => void;
+      assertHarness: (builtIn: boolean) => void;
+    }>(),
 );
 
 /** One invocation owns the count and closes every tool closure it created. */
 export function createAgentToolExecutionBudget(params: {
   maxToolCalls?: number;
+  /** External runtimes may own tools outside this source-call budget. */
+  requireNativeHarness?: boolean;
+  /** Exact native names; group/alias expansion must never widen this ceiling. */
+  allowedToolNames?: readonly string[];
   signal: AbortSignal;
   abort: (reason: Error) => void;
   isCurrent?: () => boolean;
 }) {
+  const allowedToolNames = params.allowedToolNames ? new Set(params.allowedToolNames) : undefined;
   let toolCalls = 0;
   let active = true;
   const assertCurrent = () => {
@@ -36,8 +47,15 @@ export function createAgentToolExecutionBudget(params: {
       throw error;
     }
   };
-  const admit = () => {
+  const admit = (toolName?: string) => {
     assertCurrent();
+    if (allowedToolNames && (!toolName || !allowedToolNames.has(toolName))) {
+      const error = new Error(
+        `Tool ${toolName ?? "unknown"} is outside this exact execution scope`,
+      );
+      params.abort(error);
+      throw error;
+    }
     if (params.maxToolCalls !== undefined && toolCalls >= params.maxToolCalls) {
       const error = new Error("Agent tool-call budget exhausted");
       params.abort(error);
@@ -47,13 +65,22 @@ export function createAgentToolExecutionBudget(params: {
     // Charging here admits exactly the cap even when sibling calls run in parallel.
     toolCalls += 1;
   };
+  const assertHarness = (builtIn: boolean) => {
+    assertCurrent();
+    if (params.requireNativeHarness && !builtIn) {
+      throw new Error("Scoped task execution requires the built-in OpenClaw harness");
+    }
+  };
   return {
     get toolCalls() {
       return toolCalls;
     },
     async run<T>(run: () => Promise<T>): Promise<T> {
       try {
-        return await executionBudgetContext.run({ admit, assertCurrent }, run);
+        return await executionBudgetContext.run(
+          { admit, assertCurrent, assertHarness, allowedToolNames },
+          run,
+        );
       } finally {
         active = false;
       }
@@ -61,9 +88,28 @@ export function createAgentToolExecutionBudget(params: {
   };
 }
 
+/** The actual harness owner supplies its native brand; a matching ID is insufficient. */
+export function assertAgentToolExecutionHarness(builtIn: boolean): void {
+  executionBudgetContext.getStore()?.assertHarness(builtIn);
+}
+
 /** Capture at tool construction so retained tools cannot borrow a later budget. */
-export function captureAgentToolExecutionBudget(): (() => void) | undefined {
-  return executionBudgetContext.getStore()?.admit;
+export function captureAgentToolExecutionBudget(
+  toolName?: string,
+  options?: { control?: boolean },
+): (() => void) | undefined {
+  const scope = executionBudgetContext.getStore();
+  // Host-branded Code Mode controls carry scripts; each nested native source
+  // consumes a call, while the transport still retains the deadline/close fence.
+  return scope ? (options?.control ? scope.assertCurrent : () => scope.admit(toolName)) : undefined;
+}
+
+export function hasExactAgentToolExecutionScope(): boolean {
+  return executionBudgetContext.getStore()?.allowedToolNames !== undefined;
+}
+
+export function isAgentToolExecutionToolAllowed(name: string): boolean {
+  return executionBudgetContext.getStore()?.allowedToolNames?.has(name) ?? true;
 }
 
 /** Freeze the invocation's operational fence before asynchronous source work. */

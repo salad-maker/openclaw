@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { captureSubagentRetainedWork } from "../agents/subagents/registry/subagent-registry-execution-cleanup.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
+import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
@@ -71,7 +72,13 @@ export async function cancelPluginOwnedRun(
     ) {
       return { runId, sessionKey, status: "not-active" };
     }
+    // Reuse the native session-stop caller contract. Plugin ownership narrows
+    // the target; it never substitutes for the requesting agent's authority.
+    const agentToolCaller = getGatewayToolCallerIdentity()
+      ? (await import("../agents/tools/sessions-tool-control.js")).captureSessionStopCaller()
+      : undefined;
     assertCurrent();
+    agentToolCaller?.assertCurrent();
     const payload = await dispatchGatewayMethodInProcess<{
       status: string;
       abortedRunId: string | null;
@@ -81,7 +88,8 @@ export async function cancelPluginOwnedRun(
       {
         resolveGatewayContext: request.resolveGatewayContext,
         sessionMutationCommitGuard: assertCurrent,
-        ...(!getPluginRuntimeGatewayRequestScope()?.client
+        ...(agentToolCaller ? { agentToolCaller, forceSyntheticClient: true } : {}),
+        ...(!agentToolCaller && !getPluginRuntimeGatewayRequestScope()?.client
           ? { operatorRoleActor: { kind: "system" as const } }
           : {}),
       },

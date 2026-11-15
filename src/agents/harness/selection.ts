@@ -21,6 +21,7 @@ import {
   resolveAdmittedRunActiveAssertion,
 } from "../admitted-run-context.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
+import { assertAgentToolExecutionHarness } from "../agent-tool-source-execution-guard.js";
 import {
   isHostScopedAgentToolActive,
   runWithAgentRingZeroTools,
@@ -530,6 +531,7 @@ async function runAgentHarnessOperation<T>(
   params: EmbeddedRunAttemptParams,
   execute: () => Promise<T>,
 ): Promise<T> {
+  assertAgentToolExecutionHarness(isBuiltInOpenClawAgentHarness(harness));
   await prepareActiveNodeContext(readRunOperatorAuthority(params)?.profileId);
   resolveAdmittedRunActiveAssertion(params.admittedRunContext, params.abortSignal)?.();
   const activeTrace = getActiveDiagnosticTraceContext();

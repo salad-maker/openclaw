@@ -105,7 +105,8 @@ export async function spawnSubagentDirect(
     soleImplicitMember,
     reservationPending,
     swarmReservation,
-    resolveAdmission,
+    assertAdmissionCurrent,
+    scopedTask,
     admission,
     admissionReservation,
     childDepth,
@@ -181,6 +182,7 @@ export async function spawnSubagentDirect(
     });
     const initialSession = await runWithAgentToolSourceExecutionScope(assertActive, () =>
       createInitialSubagentSession({
+        scopedTask,
         assertActive,
         cfg,
         requesterAgentId,
@@ -236,13 +238,15 @@ export async function spawnSubagentDirect(
     const isCleanupCurrent = cleanupOwner?.isCurrent ?? ownsCleanup;
     const isAbortCurrent = () => cleanupOwner?.isCurrent("chat.abort") ?? ownsAcceptedRun();
     const cleanupCreatedSession = (emitLifecycleHooks = false) =>
-      cleanupProvisionalSession(childSessionKey, {
-        emitLifecycleHooks,
-        deleteTranscript: true,
-        ...provisionalSessionIdentity,
-        isCurrent: isCleanupCurrent,
-        ...(cleanupOwner ? { callGateway: cleanupOwner.callGateway } : {}),
-      });
+      scopedTask
+        ? Promise.resolve()
+        : cleanupProvisionalSession(childSessionKey, {
+            emitLifecycleHooks,
+            deleteTranscript: true,
+            ...provisionalSessionIdentity,
+            isCurrent: isCleanupCurrent,
+            ...(cleanupOwner ? { callGateway: cleanupOwner.callGateway } : {}),
+          });
     const preparedSpawnContext = await runWithAgentToolSourceExecutionScope(assertActive, () =>
       prepareSubagentSessionContext({
         assertActive,
@@ -446,16 +450,18 @@ export async function spawnSubagentDirect(
     });
     const childTarget = { childSessionKey, childAgentId: targetAgentId };
     const cleanupFailedSpawn = (options?: CollectorCleanupOptions) =>
-      cleanupFailedSpawnBeforeAgentStart({
-        ...childTarget,
-        attachmentId,
-        emitLifecycleHooks: threadBindingReady,
-        deleteTranscript: true,
-        ...provisionalSessionIdentity,
-        ...options,
-        isCurrent: isCleanupCurrent,
-        ...(cleanupOwner ? { callGateway: cleanupOwner.callGateway } : {}),
-      });
+      scopedTask
+        ? Promise.resolve({ attachmentsRemoved: false, sessionDeleted: false })
+        : cleanupFailedSpawnBeforeAgentStart({
+            ...childTarget,
+            attachmentId,
+            emitLifecycleHooks: threadBindingReady,
+            deleteTranscript: true,
+            ...provisionalSessionIdentity,
+            ...options,
+            isCurrent: isCleanupCurrent,
+            ...(cleanupOwner ? { callGateway: cleanupOwner.callGateway } : {}),
+          });
     type SubagentBackendState = { contextEnginePreparation?: PreparedContextEngineSubagentSpawn };
     let registrationRequired = true;
     let acceptedRunCleanupError: string | undefined;
@@ -543,14 +549,7 @@ export async function spawnSubagentDirect(
       progressOrigin,
       progressSessionKey: requesterInternalKey,
       buildRegistration: (_state, runId) => {
-        if (params.collect) {
-          const latestAdmission = resolveAdmission();
-          if (!latestAdmission.ok) {
-            throw Object.assign(new Error(latestAdmission.error), {
-              spawnStatus: "forbidden" as const,
-            });
-          }
-        }
+        assertAdmissionCurrent();
         return {
           runId,
           requesterTurnRunId: ctx.requesterTurnRunId,
@@ -565,6 +564,7 @@ export async function spawnSubagentDirect(
           taskName,
           requesterAgentId,
           cleanup,
+          ...(scopedTask ? { retainOutcomeOnKeep: true as const } : {}),
           label: label || undefined,
           model: plan.resolvedModel,
           agentDir: targetAgentDir,

@@ -8,6 +8,7 @@ import { loadReplySessionInitializationSnapshot } from "../../config/sessions/se
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { resolveSessionWorkStartBlock } from "../../config/sessions/session-work-start.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding-metadata.js";
@@ -53,12 +54,19 @@ export type InitSessionStateAttemptContext = {
 
 export function assertReplySessionInitializationAllowed(
   sessionKey: string,
-  entry: Parameters<typeof resolveSessionWorkStartBlock>[1],
+  entry: InternalSessionEntry | undefined,
   options: {
     allowRestartTombstoneReplacement: boolean;
     providerReviewAcknowledgment: InitSessionStateParams["providerReviewAcknowledgment"];
   },
 ) {
+  // Scoped children belong exclusively to their one admitted native command.
+  // Reply turns bypass that command's budget, and rollover would erase its claim.
+  if (entry?.pluginScopedTask) {
+    throw new Error(
+      "Scoped task sessions cannot accept reply turns or reset; inspect the owning task instead",
+    );
+  }
   const error = resolveSessionWorkStartBlock(sessionKey, entry, {
     ...options,
     allowPendingWorkspace: captureAgentWorkspaceReadiness(sessionKey) ? true : undefined,

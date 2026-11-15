@@ -12,6 +12,7 @@ import {
   mapToolContextToSpawnedRunMetadata,
   resolveSpawnedWorkspaceInheritance,
 } from "../../spawned-context.js";
+import { readScopedTaskSpawnAuthority } from "./scoped-task-authority.js";
 import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import {
   rejectSubagentSpawnRequest,
@@ -92,9 +93,12 @@ export async function resolveSubagentChildPlan(params: {
     targetAgentId: params.targetAgentId,
     backend: "subagent",
   });
-  const childSessionKey = incognito
-    ? mintedChildSessionKey.replace(":subagent:", ":subagent:incognito-")
-    : mintedChildSessionKey;
+  const scopedTask = readScopedTaskSpawnAuthority(params.ctx);
+  const childSessionKey = scopedTask
+    ? scopedTask.childSessionKey
+    : incognito
+      ? mintedChildSessionKey.replace(":subagent:", ":subagent:incognito-")
+      : mintedChildSessionKey;
   const requesterRuntime = await resolveSandboxRuntimeStatusAsync({
     cfg: params.cfg,
     sessionKey: params.requesterInternalKey,
@@ -103,7 +107,7 @@ export async function resolveSubagentChildPlan(params: {
   });
   const creationPolicy = inheritSessionCreationPolicy(
     {
-      sandbox: requesterRuntime.sandboxRequired ? "required" : undefined,
+      sandbox: scopedTask || requesterRuntime.sandboxRequired ? "required" : undefined,
       createdActor: requesterRuntime.createdActor,
     },
     { type: "agent", id: params.requesterAgentId },

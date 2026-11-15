@@ -46,6 +46,10 @@ import {
   resolveSandboxRuntimeStatusAsync,
   withSandboxRuntimeStatusInWorker,
 } from "./runtime-status.js";
+import {
+  readScopedTaskWorkspaceAuthority,
+  resolveScopedTaskSandboxConfig,
+} from "./scoped-task-workspace.js";
 import { assertSshSandboxSecretOwnerAvailable } from "./secret-owner.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
 import { captureSandboxStateOwner, SandboxStateOwnerRequiredError } from "./state-owner.js";
@@ -128,8 +132,18 @@ async function ensureSandboxWorkspaceLayout(
   workspaceDir: string;
 }> {
   const { rawSessionKey, runtime, localWorkspace } = selected;
+  const scopedTask = readScopedTaskWorkspaceAuthority({
+    agentId: runtime.agentId,
+    sessionKey: rawSessionKey,
+    workspaceDir: params.workspaceDir,
+  });
   const assertCurrent = localWorkspace?.assertCurrent ?? params.assertCurrent;
-  const cfg = localWorkspace ? { ...selected.cfg, workspaceAccess: "rw" as const } : selected.cfg;
+  // Select the exact project path for a native read-only reviewer too. Only the
+  // layout uses rw here; the actual mount and bridge retain the granted ro mode.
+  const cfg =
+    localWorkspace || scopedTask
+      ? { ...selected.cfg, workspaceAccess: "rw" as const }
+      : selected.cfg;
   const { agentWorkspaceDir, sandboxWorkspaceDir, scopeKey, skillsWorkspaceDir, workspaceDir } =
     resolveSandboxWorkspaceLayoutPaths({
       cfg,
@@ -141,6 +155,11 @@ async function ensureSandboxWorkspaceLayout(
           : runtime.isolationSubject,
       workspaceDir: localWorkspace?.workspaceDir ?? params.workspaceDir,
     });
+
+  if (scopedTask) {
+    scopedTask.assertCurrent();
+    return { agentWorkspaceDir, scopeKey, skillsWorkspaceDir, workspaceDir };
+  }
 
   assertCurrent?.();
   if (cfg.workspaceAccess !== "rw") {
@@ -219,11 +238,18 @@ function resolveSandboxSession(params: {
   }
   // Docker and browser backends replace shared scope keys with a literal name;
   // agent scope lets the prepared isolation subject own every sandbox resource.
-  const cfg = runtime.sandboxRequired
-    ? { ...configured, scope: "agent" as const, workspaceAccess: runtime.workspaceAccess }
-    : librarySelections?.length
-      ? { ...configured, scope: "agent" as const }
-      : configured;
+  const scopedTaskConfig = resolveScopedTaskSandboxConfig({
+    agentId: runtime.agentId,
+    sessionKey: rawSessionKey,
+    configured,
+  });
+  const cfg =
+    scopedTaskConfig ??
+    (runtime.sandboxRequired
+      ? { ...configured, scope: "agent" as const, workspaceAccess: runtime.workspaceAccess }
+      : librarySelections?.length
+        ? { ...configured, scope: "agent" as const }
+        : configured);
   return { rawSessionKey, runtime, cfg };
 }
 
@@ -264,6 +290,20 @@ async function prepareSandboxWorkspaceSelection(
   resolved: ResolvedSandboxSession,
 ) {
   const { rawSessionKey, runtime } = resolved;
+  const scopedTaskConfig = resolveScopedTaskSandboxConfig({
+    agentId: runtime.agentId,
+    sessionKey: rawSessionKey,
+    workspaceDir: params.workspaceDir,
+    configured: resolveSandboxConfigForAgent(params.config, runtime.agentId),
+  });
+  if (scopedTaskConfig) {
+    if (!params.workspaceDir) {
+      throw new Error("Scoped task sandbox allocation requires its exact project workspace");
+    }
+    // A claimed native task owns only its admitted current-project path. Do not
+    // adopt a different managed guest projection or inherit parent mounts.
+    return { rawSessionKey, runtime, cfg: scopedTaskConfig, localWorkspace: undefined };
+  }
   const localWorkspace = params.config
     ? await (
         await import("./local-workspace.js")
@@ -314,9 +354,16 @@ async function resolveProvisionedSandboxContext(
   try {
     params.assertCurrent?.();
     const { rawSessionKey, runtime, cfg, localWorkspace } = selected;
+    const scopedTask = readScopedTaskWorkspaceAuthority({
+      agentId: runtime.agentId,
+      sessionKey: rawSessionKey,
+      workspaceDir: params.workspaceDir,
+    });
     const config = params.config;
     const allowGitHub =
-      config && resolveAgentConfig(config, runtime.agentId)?.tools?.github?.allowInSandbox === true;
+      !scopedTask &&
+      config &&
+      resolveAgentConfig(config, runtime.agentId)?.tools?.github?.allowInSandbox === true;
     if (allowGitHub && cfg.scope === "shared") {
       const message = `GitHub identity for agent "${runtime.agentId}" cannot enter a shared sandbox; use agent or session scope.`;
       sandboxLog.warn(message);
@@ -382,7 +429,7 @@ async function resolveProvisionedSandboxContext(
         }
       : resolvedCfg;
     let readOnlyResourceMounts =
-      resolvedCfg.scope === "shared"
+      scopedTask || resolvedCfg.scope === "shared"
         ? undefined
         : await (async () => {
             const hostPath = resolveSubagentSessionAttachmentRootDir({

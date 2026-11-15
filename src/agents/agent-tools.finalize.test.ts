@@ -3,6 +3,8 @@ import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { bindAgentToolAvailability } from "./agent-tool-availability.js";
+import { createAgentToolExecutionBudget } from "./agent-tool-source-execution-guard.js";
+import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { getBeforeToolCallHookContext } from "./before-tool-call-metadata.js";
@@ -245,3 +247,33 @@ describe("finalized tool descriptor snapshots", () => {
     });
   });
 });
+
+it.each([false, () => false] as const)(
+  "exact execution scope filters implicit aliases and binds even prepared tools with skip hooks (%#)",
+  async (wrapBeforeToolCallHook) => {
+    const source = vi.fn(async () => ({ content: [], details: {} }));
+    const prepared = wrapToolWithBeforeToolCallHook(
+      tool(schema(), { name: "write", execute: source }),
+    );
+    const controller = new AbortController();
+    const budget = createAgentToolExecutionBudget({
+      maxToolCalls: 1,
+      allowedToolNames: ["write"],
+      signal: controller.signal,
+      abort: (reason) => controller.abort(reason),
+    });
+    await budget.run(async () => {
+      const tools = finalizeAgentTools({
+        tools: [prepared, tool(schema(), { name: "apply_patch" })],
+        hookContext: {},
+        wrapBeforeToolCallHook,
+      });
+      expect(tools.map((entry) => entry.name)).toEqual(["write"]);
+      await tools[0]!.execute("first", { query: "allowed" });
+      await expect(tools[0]!.execute("second", { query: "over-limit" })).rejects.toThrow(
+        "budget exhausted",
+      );
+    });
+    expect(source).toHaveBeenCalledTimes(1);
+  },
+);

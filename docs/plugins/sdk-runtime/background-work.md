@@ -256,3 +256,65 @@ only receipts and outcomes across turns, not this invocation-bound capability.
 Later observation requires a fresh authorized tool context. No recurring jobs,
 arbitrary payloads, external event subscriptions or generic operator gateway
 access are exposed by this surface.
+
+## Caller-bound scoped native tasks
+
+Version 2 tool factories may receive `ctx.scopedTasks`, with `version: 1`.
+`prepare(request, { signal }?)` performs no dispatch. It validates an immutable
+plugin intent and returns an invocation-bound, one-use `run` closure plus planned
+`runId` and `sessionKey` correlation. Persist that correlation before calling
+`run`; a stored receipt does not authorize a later launch.
+
+The preparation request contains `intent` (a nonempty string up to 256 characters),
+`spec` (`role`, `tools`, `timeoutSeconds`, `maxToolCalls`, `handoff`),
+`workspace: "current-project"`, `sandbox: "required"`, and `network: "none"`.
+Supported tools are `read`, `write`, `edit` and `apply_patch`; reviewers may request
+only `read`. The deadline is 1–300 seconds and the tool-call budget is 1–32.
+`exec` is explicitly unavailable: a terminal model run does not establish that
+arbitrary detached processes have stopped. Arbitrary paths, identities, agents
+and models are not accepted.
+
+The invocation needs a current authenticated owner, one project, a completed
+final tool-surface capture, and permission for `sessions_spawn` and each requested
+tool. The parent must authorize the exact current project with a session-scoped
+Docker sandbox and writable workspace. Native spawn preserves sender restrictions
+and inherited denies, narrows its child allowlist to the exact requested names,
+and stamps required sandbox confinement. Parent permission mode remains unchanged,
+including an unset default; the child root is independently pinned to that project.
+Native file tools are rebuilt under that root and preserve stricter current or
+prepared read-only policy.
+
+After the durable execution claim, a host-owned grant narrows only that child's
+allocation to network `none`, no extra binds, a read-only root and no inherited
+browser, GitHub identity, environment, setup command, or copied skill corpus.
+Read-only tasks mount the same project read-only; file-writing tasks mount it
+writable. The grant expires with its exact native run. Ordinary role-required
+guests retain their existing read-only cap; parent configuration is unchanged.
+
+Call the prepared `run` with the exact planned `sessionKey`, the original intent
+as `idempotencyKey`, the exact timeout, a bounded `message`,
+`promptMode: "minimal"`, and `deliver: false`. This calls the ordinary native
+spawn owner; it does not start a second execution engine. The native session row
+atomically records create-only plugin intent and ownership. Launch failures retain
+that row so duplicates cannot overwrite it or redispatch an ambiguous launch.
+Native run registration retains correlated outcome evidence for the existing
+plugin-owned `getRun` and `cancelRun` operations.
+
+A run claims execution once in durable session state before model work. Re-entry,
+including after a crash, is refused; reconciliation retrieves evidence and never
+replays the task. Reset and the ordinary chat/reply path refuse scoped child
+sessions so they cannot discard or bypass the spent claim. The native tool-call budget spans the claimed run, including
+provider fallback, with one outer deadline. CLI, ACP and third-party harness
+paths cannot substitute an uncontrolled runner. Cancellation requested or
+acknowledged is not confirmation of interruption;
+retrieve terminal native evidence and preserve natural completion as such.
+
+This source proposal requires the native ownership and budget changes together.
+It is not an installed-host capability claim. Verification must separately cover
+caller-policy fixtures, native storage, authenticated gateway admission, sandboxed
+file tools, and cancellation before a deployment is approved.
+
+Once any scoped task is admitted, disable the plugin to roll back its availability
+while preserving the patched host's run guards and persisted state. Downgrading
+to a host that does not understand the spent execution claim could permit a later
+generic session follow-up to bypass that guard, even after the original run settled.

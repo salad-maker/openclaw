@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isAbsolute } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -41,6 +42,7 @@ import { captureDelegatedToolPolicyAssertion } from "../../delegated-tool-policy
 import { inheritedToolAllowPatch, inheritedToolDenyPatch } from "../../inherited-tool-deny.js";
 import type { resolveSpawnAdmission } from "../../spawn-plan.js";
 import type { PreparedSessionPermissionPolicy } from "../../tool-fs-policy.types.js";
+import type { ScopedTaskSpawnAuthority } from "./scoped-task-authority.js";
 import { captureSpawnParentLineage } from "./spawn-parent-lineage.js";
 import { withSubagentSessionSource } from "./subagent-session-source.js";
 import type { SpawnSubagentParams } from "./subagent-spawn-contract.js";
@@ -52,6 +54,7 @@ import {
 } from "./subagent-spawn.runtime.js";
 
 export async function createInitialSubagentSession(input: {
+  scopedTask?: ScopedTaskSpawnAuthority;
   cfg: OpenClawConfig;
   requesterAgentId: string;
   targetAgentId: string;
@@ -261,6 +264,42 @@ export async function createInitialSubagentSession(input: {
             initialChildSessionPatch.pendingWorktree = preparedWorktree.pendingWorktree;
           }
           const commit = async (assertSourceCurrent?: SessionSourceAssertion) => {
+            const scopedTask = params.scopedTask;
+            scopedTask?.assertCurrent();
+            if (
+              scopedTask &&
+              (params.incognito ||
+                params.worktree ||
+                params.creationPolicy.sandbox !== "required" ||
+                !params.spawnedWorkspaceDir ||
+                !isAbsolute(params.spawnedWorkspaceDir) ||
+                params.spawnedWorkspaceDir !== scopedTask.workspaceDir ||
+                params.requesterAgentId !== params.targetAgentId ||
+                scopedTask.childSessionKey !== params.childSessionKey)
+            ) {
+              throw new Error(
+                "Scoped native task creation requires its exact same-agent persistent child",
+              );
+            }
+            // The native row is the immutable intent. A retained row, including
+            // one with no acknowledged run, must never be overwritten/replayed.
+            const assertAbsent = scopedTask
+              ? captureSessionEntrySourceAssertion({
+                  scope: {
+                    agentId: target.agentId,
+                    sessionKey: target.canonicalKey,
+                    storePath: target.readSource?.path ?? target.storePath,
+                  },
+                  expected: undefined,
+                  fields: ["sessionId"],
+                  assertCurrent: scopedTask.assertCurrent,
+                  refuse: () => {
+                    throw new Error(
+                      "Scoped task intent already exists; reconcile without redispatch",
+                    );
+                  },
+                })
+              : undefined;
             const fields = ["sessionId", "lifecycleRevision", "skillLibrarySelections"] as const;
             const expected =
               parentEntry && (parentMemory || parentEntry.skillLibrarySelections)
@@ -352,9 +391,21 @@ export async function createInitialSubagentSession(input: {
                         }
                       : {}),
                   }),
+                  ...(scopedTask
+                    ? {
+                        pluginOwnerId: scopedTask.pluginId,
+                        pluginScopedTask: structuredClone(scopedTask.descriptor),
+                        sessionRoot: params.spawnedWorkspaceDir,
+                      }
+                    : {}),
                 },
                 sessionEntryCommitGuardOptions(
-                  composeSessionSourceAssertion([params.assertActive, source, assertSourceCurrent]),
+                  composeSessionSourceAssertion([
+                    params.assertActive,
+                    source,
+                    assertSourceCurrent,
+                    assertAbsent,
+                  ]),
                 ),
               );
             return childMemory

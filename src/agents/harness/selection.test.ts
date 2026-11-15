@@ -40,6 +40,7 @@ import {
   type AdmittedRunContext,
   type PreparedAgentRunAdmission,
 } from "../admitted-run-context.js";
+import { createAgentToolExecutionBudget } from "../agent-tool-source-execution-guard.js";
 import { isHostScopedAgentToolActive } from "../agent-tools.ring-zero-context.js";
 import {
   createApiKeyCredential,
@@ -543,6 +544,22 @@ function registerTestCompactor(
 }
 
 describe("runAgentHarnessAttempt", () => {
+  it("refuses plugin harness tools under a native-only execution budget", async () => {
+    const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("plugin"));
+    registerHarness({ runAttempt });
+    const controller = new AbortController();
+    const budget = createAgentToolExecutionBudget({
+      requireNativeHarness: true,
+      maxToolCalls: 2,
+      signal: controller.signal,
+      abort: (reason) => controller.abort(reason),
+    });
+    await expect(budget.run(() => runAgentHarnessAttempt(createAttemptParams()))).rejects.toThrow(
+      "requires the built-in OpenClaw harness",
+    );
+    expect(runAttempt).not.toHaveBeenCalled();
+  });
+
   it("carries silent heartbeat outcome into the plugin host boundary exactly once per retry", async () => {
     const harnessId = "codex";
     const root = trajectoryTempDirs.make("harness-heartbeat-outcome-");

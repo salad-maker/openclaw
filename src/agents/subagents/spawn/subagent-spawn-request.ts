@@ -15,6 +15,7 @@ import { listSwarmRunsForGroup } from "../registry/subagent-registry.js";
 import { resolveSwarmConfig } from "../swarm/swarm-config.js";
 import { validateStructuredOutputSchema } from "../swarm/swarm-output-schema.js";
 import { holdQueuedSwarmRun, reserveSwarmRun } from "../swarm/swarm-scheduler.js";
+import { readScopedTaskSpawnAuthority } from "./scoped-task-authority.js";
 import { getSubagentDepthFromSessionStoreInWorker } from "./subagent-depth.js";
 import { createSubagentSessionStore } from "./subagent-session-store.js";
 import { resolveSubagentContextMode } from "./subagent-spawn-context.js";
@@ -309,13 +310,16 @@ export async function resolveSubagentSpawnRequest(
   const maxSpawnDepth = admission.maxSpawnDepth ?? childDepth;
   const swarmLaunchReplayKey = normalizeOptionalString(params.swarmLaunchReplayKey);
   // Registry and Gateway identities are global, while host replay keys are requester-scoped.
-  const childIdem = swarmLaunchReplayKey
-    ? `swarm_${crypto
-        .createHash("sha256")
-        .update(JSON.stringify([requesterInternalKey, swarmLaunchReplayKey]))
-        .digest("hex")
-        .slice(0, 32)}`
-    : crypto.randomUUID();
+  const scopedTask = readScopedTaskSpawnAuthority(ctx);
+  const childIdem = scopedTask
+    ? scopedTask.descriptor.runId
+    : swarmLaunchReplayKey
+      ? `swarm_${crypto
+          .createHash("sha256")
+          .update(JSON.stringify([requesterInternalKey, swarmLaunchReplayKey]))
+          .digest("hex")
+          .slice(0, 32)}`
+      : crypto.randomUUID();
   let reservationPending = false;
   let soleImplicitMember = false;
   if (params.collect && swarmGroupId && swarmSchedulerGroupKey) {
@@ -402,6 +406,18 @@ export async function resolveSubagentSpawnRequest(
       soleImplicitMember,
       reservationPending,
       swarmReservation: reservation,
+      assertAdmissionCurrent: () => {
+        if (!params.collect) {
+          return;
+        }
+        const latestAdmission = resolveAdmission();
+        if (!latestAdmission.ok) {
+          throw Object.assign(new Error(latestAdmission.error), {
+            spawnStatus: "forbidden" as const,
+          });
+        }
+      },
+      scopedTask,
       resolveAdmission,
       admission,
       admissionReservation: admissionReservation?.ok ? admissionReservation : undefined,

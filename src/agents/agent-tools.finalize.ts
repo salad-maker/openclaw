@@ -2,6 +2,10 @@ import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
+import {
+  hasExactAgentToolExecutionScope,
+  isAgentToolExecutionToolAllowed,
+} from "./agent-tool-source-execution-guard.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import type { HookContext } from "./agent-tools.before-tool-call.types.js";
 import {
@@ -13,6 +17,7 @@ import { prepareAgentToolDescriptorSnapshot } from "./agent-tools.descriptor-sna
 import { bindToolParameterSchema, normalizeToolParameters } from "./agent-tools.schema.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { isToolWrappedWithBeforeToolCallHook } from "./before-tool-call-metadata.js";
+import { isCodeModeControlTool } from "./code-mode-control-tools.js";
 
 type FinalizeAgentToolsOptions = {
   tools: AnyAgentTool[];
@@ -31,7 +36,14 @@ type FinalizeAgentToolsOptions = {
   recordToolPrepStage?: (name: string) => void;
 };
 
-export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgentTool[] {
+export function finalizeAgentTools(input: FinalizeAgentToolsOptions): AnyAgentTool[] {
+  const exactExecutionScope = hasExactAgentToolExecutionScope();
+  const options = {
+    ...input,
+    tools: input.tools.filter(
+      (tool) => isCodeModeControlTool(tool) || isAgentToolExecutionToolAllowed(tool.name),
+    ),
+  };
   finalizeAgentToolAvailability(options.tools, { beforeNormalization: true });
   const descriptors = prepareAgentToolDescriptorSnapshot({
     ...options,
@@ -56,9 +68,10 @@ export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgent
     ...(options.approvalMode ? { approvalMode: options.approvalMode } : {}),
   };
   const withHooks =
-    options.wrapBeforeToolCallHook === false
+    !exactExecutionScope && options.wrapBeforeToolCallHook === false
       ? normalized
       : normalized.map((tool) =>
+          !exactExecutionScope &&
           typeof options.wrapBeforeToolCallHook === "function" &&
           !options.wrapBeforeToolCallHook(tool)
             ? tool

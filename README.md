@@ -1,5 +1,11 @@
 # OpenClaw 🦞 — Your assistant, on your devices, in your chats
 
+> **About this fork branch:** `coordination/2026.11.3` contains custom host support
+> for a separately maintained, currently private coordination plugin. Read the
+> [coordination patch overview](COORDINATION-PATCH.md) for its purpose, interfaces,
+> security boundaries, evidence, and limitations. This is not an official OpenClaw
+> release; the upstream installation commands below do not install this patch.
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-banner-light.png">

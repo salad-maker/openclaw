@@ -135,6 +135,44 @@ export function registerSessionInitializationAdmissionTests({
     expect(initialized.sessionKey).toBe(scope.sessionKey);
     expect(loadSessionEntry(scope)?.sessionId).toBe(initialized.sessionId);
   });
+  it.each(["fresh", "expired", "reset"] as const)(
+    "rejects a scoped child through %s reply initialization without losing its execution claim",
+    async (kind) => {
+      const storePath = await makeStorePath("openclaw-scoped-child-reply-", "main");
+      const sessionKey = "agent:main:subagent:scoped-reply-denied";
+      const scope = { agentId: "main", storePath, sessionKey };
+      const updatedAt = kind === "expired" ? Date.now() - 120_000 : Date.now();
+      const entry = {
+        sessionId: "scoped-child",
+        lifecycleRevision: "original-scoped-child",
+        pluginOwnerId: "coordination",
+        updatedAt,
+        sessionStartedAt: updatedAt,
+        lastInteractionAt: updatedAt,
+        pluginScopedTask: {
+          version: 1 as const,
+          runId: "scoped-original-run",
+          intentSha256: "intent",
+          scopeSha256: "scope",
+          requestSha256: "request",
+          maxToolCalls: 2,
+          timeoutSeconds: 30,
+          tools: ["read"],
+          executionStartedAt: updatedAt,
+        },
+      };
+      await upsertSessionEntryCore(scope, entry);
+      const persisted = loadSessionEntry(scope);
+      await expect(
+        initSessionState({
+          cfg: { session: { store: storePath, reset: { mode: "idle", idleMinutes: 1 } } },
+          ctx: telegramTurn(sessionKey, kind === "reset" ? "/new" : "hello", "owner"),
+        }),
+      ).rejects.toThrow("Scoped task sessions cannot accept reply turns or reset");
+      expect(loadSessionEntry(scope)).toEqual(persisted);
+    },
+  );
+
   it.each(["same-id", "new-id", "created", "reset-before-read"] as const)(
     "hands the acknowledged %s initialization to a fresh view of its original admission",
     async (kind) => {

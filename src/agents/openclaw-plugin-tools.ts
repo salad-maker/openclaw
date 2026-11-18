@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getAgentToolAssistantTurnId } from "../../packages/agent-core/src/tool-execution-context.js";
 import { getRuntimeConfigSnapshot, selectLiveRuntimeConfig } from "../config/config.js";
@@ -20,7 +19,6 @@ import { resolveAgentScopedOutboundMediaAccess } from "../media/read-capability.
 import { resolveProviderAuthScope } from "../plugins/provider-auth-scope.js";
 import { getActivePluginRegistry, getActivePluginRegistryVersion } from "../plugins/runtime.js";
 import {
-  getInProcessGatewayRequestContext,
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeRegistryScope,
 } from "../plugins/runtime/gateway-request-scope.js";
@@ -31,6 +29,8 @@ import {
   getPluginToolMeta,
   setPluginToolMeta,
 } from "../plugins/tool-metadata.js";
+import { bindPluginScheduleSource } from "../plugins/tool-schedules.js";
+import { bindPluginScopedTaskSource } from "../plugins/tool-scoped-tasks.js";
 import type {
   OpenClawPluginToolAuthQuery,
   OpenClawPluginToolDelivery,
@@ -44,10 +44,7 @@ import { resolveApiKeyForProfile, resolveAuthProfileOrder } from "./auth-profile
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { bindRequesterOwnerIdentity } from "./cron-creator-authority-context.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
-import {
-  createMcpClientElicitationHandler,
-  MCP_ELICITATION_TIMEOUT_MS,
-} from "./mcp-client-elicitation.js";
+import { MCP_ELICITATION_TIMEOUT_MS } from "./mcp-client-elicitation.js";
 import {
   projectMcpCallToolResult,
   setMcpCodeModeGuestResultFromAgentResult,
@@ -57,6 +54,7 @@ import {
   hasRuntimeAvailableProviderAuth,
   resolveApiKeyForProviderCore as resolveProviderAuth,
 } from "./model-auth.js";
+import { registerNodeToolElicitation } from "./node-tool-elicitation.js";
 import {
   resolveOpenClawPluginToolInputs,
   type OpenClawPluginToolOptions,
@@ -66,10 +64,7 @@ import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.type
 import type { AgentToolResult } from "./runtime/index.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
-import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "./tools/gateway-caller-context.js";
+import { captureGatewayToolCallerAssertion } from "./tools/gateway-caller-context.js";
 import { callGatewayTool } from "./tools/gateway.js";
 import { hasProviderAuthForTool } from "./tools/model-config.helpers.js";
 import { captureAgentWorkspaceReadiness } from "./workspace-readiness.js";
@@ -82,37 +77,6 @@ type MaterializedNodeToolEntry = ReturnType<typeof listConnectedNodePluginTools>
   command: string;
   normalizedName: string;
 };
-
-function registerNodeToolElicitation(
-  nodeId: string,
-  sessionKey: string | undefined,
-  signal?: AbortSignal,
-) {
-  const caller = getGatewayToolCallerIdentity();
-  const assertCurrent = captureGatewayToolCallerAssertion();
-  if (!caller || !assertCurrent || caller.sessionKey !== sessionKey) {
-    return undefined;
-  }
-  const registry = getInProcessGatewayRequestContext(caller.gatewayContextResolver)?.nodeRegistry;
-  const node = registry?.get(nodeId);
-  if (!registry || !node) {
-    return undefined;
-  }
-  assertCurrent();
-  const id = randomUUID();
-  const handle = createMcpClientElicitationHandler({
-    sessionKey,
-    agentId: caller.agentId,
-    assertCurrent,
-  });
-  const release = registry.mcpElicitation.register({
-    id,
-    node,
-    signal: AbortSignal.any([...(caller.approvalSignals ?? []), ...(signal ? [signal] : [])]),
-    handle,
-  });
-  return { id, [Symbol.dispose]: release };
-}
 
 function isAgentToolResult(value: unknown): value is AgentToolResult<unknown> {
   return isRecord(value) && Array.isArray(value.content);
@@ -542,6 +506,45 @@ function* resolveOpenClawPluginToolSteps(
         }
       : {}),
   };
+  bindPluginScheduleSource(resolution.context, {
+    agentSessionKey: params.options?.runSessionKey ?? params.options?.agentSessionKey,
+    agentId: pluginToolInputs.context.agentId,
+    agentAccountId: pluginToolInputs.context.agentAccountId,
+    config: availabilityConfig,
+    runId: params.options?.runId,
+    creatorToolAllowlist: params.options?.cronCreatorToolAllowlist,
+    creatorToolAllowlistCaptureRef: params.options?.cronCreatorToolAllowlistCaptureRef,
+    resolveCreatorToolAuthority: params.options?.resolveCronCreatorToolAuthority,
+    creatorAuthorityUnavailableReason: params.options?.cronCreatorAuthorityUnavailableReason,
+    selfRemoveOnlyJobId: params.options?.cronSelfRemoveOnlyJobId,
+  });
+  bindPluginScopedTaskSource(resolution.context, {
+    fsPolicy: pluginToolInputs.context.fsPolicy
+      ? { ...pluginToolInputs.context.fsPolicy }
+      : undefined,
+    workspaceDir: pluginToolInputs.context.workspaceDir,
+    getConfig: () => pluginToolInputs.context.getRuntimeConfig?.() ?? availabilityConfig,
+    creatorToolAllowlist: params.options?.cronCreatorToolAllowlist,
+    creatorToolAllowlistCaptureRef: params.options?.cronCreatorToolAllowlistCaptureRef,
+    spawnContext: {
+      agentSessionKey: pluginToolInputs.context.sessionKey,
+      expectedParentSessionId: pluginToolInputs.context.sessionId,
+      senderIsOwner: pluginToolInputs.context.senderIsOwner,
+      requesterTurnRunId: params.options?.runId,
+      requesterAgentIdOverride: pluginToolInputs.context.agentId,
+      agentChannel: params.options?.agentChannel,
+      agentAccountId: params.options?.agentAccountId,
+      agentTo: params.options?.agentTo,
+      agentThreadId: params.options?.agentThreadId,
+      workspaceDir: pluginToolInputs.context.workspaceDir,
+      sandboxed: pluginToolInputs.context.sandboxed,
+      inheritedToolDenylist: params.options?.inheritedToolDenylist,
+      inheritedToolPolicySource: params.options?.inheritedToolPolicySource,
+      requesterToolDenylist: params.options?.requesterToolDenylist,
+      readDelegationConfig: params.options?.readDelegationConfig,
+      sessionPermissionPolicy: params.options?.sessionPermissionPolicy,
+    },
+  });
   const pluginTools = applySkillLibraryGrant(
     captureAgentWorkspaceReadiness(pluginToolInputs.context.sessionKey)
       ? yield* resolvePluginToolsSteps(resolution)

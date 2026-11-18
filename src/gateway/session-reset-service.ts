@@ -92,7 +92,7 @@ import {
   rollbackGatewaySessionPreparation,
   settleGatewaySessionLifecycleCommit,
 } from "./session-lifecycle-preparation.js";
-import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
+import { resolveResetOwnershipError } from "./session-plugin-ownership.js";
 import { invalidSessionRequest, unavailableSessionRequest } from "./session-request-error.js";
 import {
   buildPendingAcpMeta,
@@ -197,7 +197,7 @@ async function performPreparedGatewaySessionReset({
   worktreeContext: ReturnType<typeof captureWorktreeRunEndContext>;
   worktreeEnv: NodeJS.ProcessEnv;
   lookup: Parameters<typeof withGatewaySessionEntryReadOnly>[0];
-  initialResetEntry: SessionEntry | undefined;
+  initialResetEntry: InternalSessionEntry | undefined;
 }): ReturnType<typeof performGatewaySessionReset> {
   const memory = getSessionActorStorageBinding({
     sessionKey: resetTarget.target.canonicalKey,
@@ -242,16 +242,6 @@ async function performPreparedGatewaySessionReset({
       : !entry
         ? authorizeResetCreation()
         : undefined;
-  const resolveResetOwnershipError = (
-    entry: SessionEntry | undefined,
-    key = resetTarget.target.canonicalKey,
-  ) =>
-    resolvePluginSessionOwnershipError({
-      action: "reset",
-      entry,
-      key,
-      pluginOwnerId: params.authorizedPluginId,
-    });
   const resolveResetHarnessError = (entry: SessionEntry | undefined) => {
     const message = resolveMissingAgentHarnessSessionError(resetTarget.target.canonicalKey, entry);
     return message ? errorShape(ErrorCodes.INVALID_REQUEST, message) : undefined;
@@ -273,14 +263,21 @@ async function performPreparedGatewaySessionReset({
       return errorShape(ErrorCodes.FORBIDDEN, formatErrorMessage(error));
     }
   };
-  const resolveResetEntryAccessError = (entry: SessionEntry | undefined, canonicalKey: string) =>
+  const resolveResetEntryAccessError = (
+    entry: InternalSessionEntry | undefined,
+    canonicalKey: string,
+  ) =>
     resolveResetAccessProgramError(entry) ??
     resolveFastModeSelectionError(entry) ??
-    resolveResetOwnershipError(entry, canonicalKey);
+    resolveResetOwnershipError(entry, canonicalKey, params.authorizedPluginId);
   const initialEntryError =
     resolveResetCreationError(initialResetEntry) ??
     resolveResetAccessProgramError(initialResetEntry) ??
-    resolveResetOwnershipError(initialResetEntry) ??
+    resolveResetOwnershipError(
+      initialResetEntry,
+      resetTarget.target.canonicalKey,
+      params.authorizedPluginId,
+    ) ??
     resolveFastModeSelectionError(initialResetEntry) ??
     resolveResetHarnessError(initialResetEntry);
   if (initialEntryError) {

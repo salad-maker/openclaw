@@ -25,11 +25,9 @@ import { prepareRemoteSkillConnections } from "../../skills/runtime/remote-skill
 import type { SkillEligibilityContext, SkillSnapshot, SkillUsagePath } from "../../skills/types.js";
 import {
   readAdmittedRunOperatorAuthority,
-  type AdmittedRunContext,
   type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
 import { resolveAgentConfig } from "../agent-scope-config.js";
-import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import {
   resolveSubagentSessionAttachmentRootDir,
   SANDBOX_SUBAGENT_ATTACHMENTS_MOUNT,
@@ -43,8 +41,6 @@ import {
 } from "../worktrees/preparation-timing.js";
 import { createSandboxBackend, getSandboxBackendWorkdirResolver } from "./backend.js";
 import { ensureSandboxBrowser } from "./browser.js";
-import { resolveSandboxDependencyStore } from "./config-contract.js";
-import { resolveSandboxConfigForAgent } from "./config.js";
 import { SANDBOX_GITHUB_CONFIG_DIR } from "./constants.js";
 import { retainSandboxContainerUsage } from "./container-usage.js";
 import { resolveSandboxDockerUser } from "./docker-user.js";
@@ -52,16 +48,21 @@ import { createSandboxFsBridge } from "./fs-bridge.js";
 import { toSandboxProvisioningError } from "./provisioning-error.js";
 import { acquireSandboxRuntimeUse } from "./registry-lifecycle.js";
 import {
-  resolveSandboxRuntimeStatus,
   resolveSandboxRuntimeStatusAsync,
   withSandboxRuntimeStatusInWorker,
 } from "./runtime-status.js";
+import { readScopedTaskWorkspaceAuthority } from "./scoped-task-workspace.js";
 import { assertSshSandboxSecretOwnerAvailable } from "./secret-owner.js";
 import { resolveSandboxSession } from "./session-selection.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
 import { captureSandboxStateOwner } from "./state-owner.js";
 import { bindStreamSandboxContext } from "./stream-context.js";
 import type { SandboxContext, SandboxWorkspaceInfo } from "./types.js";
+import {
+  prepareSandboxWorkspaceSelection,
+  type ResolveSandboxContextParams,
+  type ResolvedSandboxSession,
+} from "./workspace-selection.js";
 
 const sandboxLog = createSubsystemLogger("agent/sandbox");
 
@@ -85,8 +86,18 @@ async function ensureSandboxWorkspaceLayout(
 }> {
   using phases = observeDiagnosticsTimelinePhases("attempt.setup.sandbox.layout.workspace");
   const { rawSessionKey, runtime, localWorkspace } = selected;
+  const scopedTask = readScopedTaskWorkspaceAuthority({
+    agentId: runtime.agentId,
+    sessionKey: rawSessionKey,
+    workspaceDir: params.workspaceDir,
+  });
   const assertCurrent = localWorkspace?.assertCurrent ?? params.assertCurrent;
-  const cfg = localWorkspace ? { ...selected.cfg, workspaceAccess: "rw" as const } : selected.cfg;
+  // Select the exact project path for a native read-only reviewer too. Only the
+  // layout uses rw here; the actual mount and bridge retain the granted ro mode.
+  const cfg =
+    localWorkspace || scopedTask
+      ? { ...selected.cfg, workspaceAccess: "rw" as const }
+      : selected.cfg;
   const { agentWorkspaceDir, sandboxWorkspaceDir, scopeKey, skillsWorkspaceDir, workspaceDir } =
     resolveSandboxWorkspaceLayoutPaths({
       cfg,
@@ -98,6 +109,11 @@ async function ensureSandboxWorkspaceLayout(
           : runtime.isolationSubject,
       workspaceDir: localWorkspace?.workspaceDir ?? params.workspaceDir,
     });
+
+  if (scopedTask) {
+    scopedTask.assertCurrent();
+    return { agentWorkspaceDir, scopeKey, skillsWorkspaceDir, workspaceDir };
+  }
 
   assertCurrent?.();
   if (lifetime) {
@@ -212,23 +228,6 @@ async function ensureSandboxWorkspaceLayout(
   };
 }
 
-type ResolveSandboxContextParams = {
-  config?: OpenClawConfig;
-  agentId?: string;
-  execOverrides?: ExecPolicyOverrides;
-  requireCurrentConfig?: boolean;
-  assertCurrent?: () => void;
-  abortSignal?: AbortSignal;
-  admittedRunContext?: AdmittedRunContext;
-  sessionKey?: string;
-  skillsSnapshot?: SkillSnapshot;
-  workspaceDir?: string;
-  /** Classification already prepared for this session's workspace setup. */
-  preparedRuntimeStatus?: ReturnType<typeof resolveSandboxRuntimeStatus>;
-};
-
-type ResolvedSandboxSession = NonNullable<Awaited<ReturnType<typeof resolveSandboxSession>>>;
-
 function assertSandboxSessionSecretOwnerAvailable(
   config: OpenClawConfig | undefined,
   resolved: ResolvedSandboxSession,
@@ -243,74 +242,6 @@ function assertSandboxSessionSecretOwnerAvailable(
     scope: resolved.cfg.scope,
     agentId: resolved.runtime.agentId,
   });
-}
-
-async function prepareSandboxWorkspaceSelection(
-  params: ResolveSandboxContextParams,
-  resolved: ResolvedSandboxSession,
-  guard?: WorkspaceStateGuard,
-  operatorAuthority = readAdmittedRunOperatorAuthority(params.admittedRunContext),
-  persistentExecution = false,
-) {
-  const { rawSessionKey, runtime } = resolved;
-  params.assertCurrent?.();
-  const localWorkspace = params.config
-    ? await (
-        await import("./local-workspace.js")
-      ).prepareLocalSandboxWorkspace({
-        cfg: params.config,
-        agentId: runtime.agentId,
-        sessionKey: rawSessionKey,
-        workspaceDir: params.workspaceDir,
-        sandbox: resolved.cfg,
-        signal:
-          params.abortSignal && operatorAuthority?.signal
-            ? AbortSignal.any([params.abortSignal, operatorAuthority.signal])
-            : (params.abortSignal ?? operatorAuthority?.signal),
-        // Cleanup retains the workspace owner after execution authorization closes.
-        assertCurrent: persistentExecution ? undefined : params.assertCurrent,
-        stateOwnerPath: guard?.stateOwnerPath,
-        assertHost: () => {
-          if (persistentExecution) {
-            guard?.assertHost?.();
-            return;
-          }
-          if (params.admittedRunContext) {
-            operatorAuthority?.assertCurrent();
-            guard?.assertHost?.();
-          } else {
-            params.assertCurrent?.();
-          }
-        },
-      })
-    : undefined;
-  try {
-    const cfg = localWorkspace
-      ? {
-          ...resolved.cfg,
-          scope: "session" as const,
-          docker: resolveSandboxDependencyStore(resolved.cfg.docker),
-          workspaceAccess:
-            resolveSandboxConfigForAgent(params.config, runtime.agentId).workspaceAccess === "ro"
-              ? ("ro" as const)
-              : ("rw" as const),
-        }
-      : resolved.cfg;
-
-    if (
-      !localWorkspace &&
-      runtime.sandboxRequired &&
-      resolveSandboxConfigForAgent(params.config, runtime.agentId).workspaceAccess === "rw"
-    ) {
-      sandboxLog.warn(
-        'Configured sandbox workspaceAccess "rw" is capped to "ro" for a role-required session; guests cannot share the writable agent workspace.',
-      );
-    }
-    return { rawSessionKey, runtime, cfg, localWorkspace };
-  } catch (error) {
-    localWorkspace?.[Symbol.dispose]();
-    throw error;
-  }
 }
 
 export async function resolveSandboxContext(
@@ -387,7 +318,13 @@ async function resolveSandboxContextWithAuthority(
           ownedParams.assertCurrent?.();
           const { rawSessionKey, runtime, cfg, localWorkspace } = selected;
           const config = ownedParams.config;
+          const scopedTask = readScopedTaskWorkspaceAuthority({
+            agentId: runtime.agentId,
+            sessionKey: rawSessionKey,
+            workspaceDir: ownedParams.workspaceDir,
+          });
           const allowGitHub =
+            !scopedTask &&
             config &&
             resolveAgentConfig(config, runtime.agentId)?.tools?.github?.allowInSandbox === true;
           if (allowGitHub && cfg.scope === "shared") {
@@ -454,7 +391,7 @@ async function resolveSandboxContextWithAuthority(
               }
             : resolvedCfg;
           let readOnlyResourceMounts =
-            resolvedCfg.scope === "shared"
+            scopedTask || resolvedCfg.scope === "shared"
               ? undefined
               : await (async () => {
                   const hostPath = resolveSubagentSessionAttachmentRootDir({
@@ -479,7 +416,7 @@ async function resolveSandboxContextWithAuthority(
             (readOnlyResourceMounts ??= []).push(githubMount);
           }
           const gitBinDir = getGatewayAgentGitBinDir();
-          if (gitBinDir && (cfg.backend === "docker" || cfg.backend === "podman")) {
+          if (!scopedTask && gitBinDir && (cfg.backend === "docker" || cfg.backend === "podman")) {
             (readOnlyResourceMounts ??= []).push({
               hostPath: gitBinDir,
               containerPath: AGENT_GIT_SANDBOX_BIN,

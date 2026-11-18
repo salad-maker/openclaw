@@ -20,7 +20,6 @@ import {
   bindLegacyPluginSdkResourceHost,
   getLegacyPluginSdkResourceHost,
 } from "../plugins/legacy-sdk-resource-host.js";
-import { createPluginRecord } from "../plugins/loader-records.js";
 import type { PluginDiagnostic } from "../plugins/manifest-types.js";
 import {
   createPluginCache,
@@ -41,6 +40,11 @@ import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { createParentTranscriptWriteContext } from "./server-plugin-transcript.test-support.js";
+import {
+  addLoadedPlugin,
+  createDuplexPluginRegistry,
+  createRegistry,
+} from "./server-plugins.registry.test-support.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-plugin-restart-owner-");
 
@@ -151,46 +155,6 @@ vi.mock("../channels/registry.js", () => ({
   formatChannelPrimerLine: () => "",
   formatChannelSelectionLine: () => "",
 }));
-
-const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
-  ...createEmptyPluginRegistry(),
-  diagnostics,
-});
-
-function addLoadedPlugin(
-  registry: PluginRegistry,
-  params: {
-    id: string;
-    origin?: PluginRegistry["plugins"][number]["origin"];
-    trustedOfficialInstall?: boolean;
-  },
-): PluginRegistry {
-  registry.plugins.push(
-    createPluginRecord({
-      id: params.id,
-      name: params.id,
-      source: `/tmp/${params.id}/index.js`,
-      origin: params.origin ?? "bundled",
-      enabled: true,
-      configSchema: false,
-      ...(params.trustedOfficialInstall !== undefined
-        ? { trustedOfficialInstall: params.trustedOfficialInstall }
-        : {}),
-    }),
-  );
-  return registry;
-}
-
-function createDuplexPluginRegistry(command = "image.bridge"): PluginRegistry {
-  const registry = addLoadedPlugin(createRegistry([]), { id: "duplex-plugin" });
-  registry.nodeHostCommands.push({
-    pluginId: "duplex-plugin",
-    pluginName: "Duplex plugin",
-    command: { command, duplex: true, handle: async () => "{}" },
-    source: "test",
-  });
-  return registry;
-}
 
 type ServerPluginsModule = typeof import("./server-plugins.js") & {
   clearFallbackGatewayContext: () => void;
@@ -2087,6 +2051,7 @@ describe("loadGatewayPlugins", () => {
         message: "dream task",
         deliver: false,
         disableTools: true,
+        timeoutSeconds: 300,
       }),
     );
 
@@ -2097,7 +2062,24 @@ describe("loadGatewayPlugins", () => {
     expect(request.internal.pluginSubagentToolsAllow).toEqual([]);
     expect(request.params).not.toHaveProperty("disableTools");
     expect(request.params).not.toHaveProperty("toolsAllow");
+    expect(request.params.timeout).toBe(300);
+    expect(request.params).not.toHaveProperty("timeoutSeconds");
   });
+
+  test.each([0, -1, 301, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    "rejects unbounded or invalid plugin subagent deadline %s before dispatch",
+    async (timeoutSeconds) => {
+      const runtime = await createSubagentRuntime();
+      await expect(
+        runtime.run({
+          sessionKey: "agent:main:subagent:deadline",
+          message: "bounded",
+          timeoutSeconds,
+        }),
+      ).rejects.toThrow("between 1 and 300");
+      expect(handleGatewayRequest).not.toHaveBeenCalled();
+    },
+  );
 
   test.each<{ name: string; result: AgentWaitResult; expected?: AgentWaitResult }>([
     {

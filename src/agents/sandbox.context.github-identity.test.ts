@@ -15,6 +15,7 @@ import { registerSandboxBackend } from "./sandbox/backend.js";
 import type { CreateSandboxBackendParams } from "./sandbox/backend.types.js";
 import { resolveSandboxContext } from "./sandbox/context.js";
 import { resolvePreparedSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
+import { withScopedTaskWorkspaceAuthority } from "./sandbox/scoped-task-workspace.js";
 import { resolveSandboxMountSelection } from "./sandbox/workspace-mounts.js";
 
 const backend = vi.hoisted(() =>
@@ -206,3 +207,66 @@ it.each(["missing", "symlink"])("refuses a %s profile before mounting it", async
   await expect(resolve(config)).rejects.toThrow(/profile is unavailable; reconnect/);
   expect(backend).not.toHaveBeenCalled();
 });
+
+it.each(["ro", "rw"] as const)(
+  "scoped task selects its exact project %s without loading configured GitHub identity",
+  async (workspaceAccess) => {
+    const { config, profileDir } = await fixture();
+    const workspaceDir = config.agents!.defaults!.workspace!;
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "artifact.txt"), "fixture result");
+    // The ordinary identity path now fails. Scoped allocation must not read it.
+    await fs.rm(profileDir, { recursive: true });
+    Object.assign(config.agents!.defaults!.sandbox!, {
+      mode: "all",
+      scope: "session",
+      workspaceAccess: "rw",
+      docker: {
+        network: "parent-network",
+        binds: ["/fixture/private:/private"],
+        env: { FIXTURE_SECRET: "sentinel" },
+      },
+    });
+    await withScopedTaskWorkspaceAuthority(
+      {
+        agentId: "release",
+        sessionKey: "agent:release:task",
+        workspaceDir,
+        workspaceAccess,
+        assertCurrent() {},
+      },
+      async () => {
+        const sandbox = expectDefined(await resolve(config, "release", true), "scoped sandbox");
+        expect(sandbox.workspaceDir).toBe(workspaceDir);
+        expect(sandbox.agentWorkspaceDir).toBe(workspaceDir);
+        expect(sandbox.workspaceAccess).toBe(workspaceAccess);
+        expect(await fs.readFile(path.join(sandbox.workspaceDir, "artifact.txt"), "utf8")).toBe(
+          "fixture result",
+        );
+        expect(sandbox.docker).toMatchObject({
+          network: "none",
+          binds: [],
+          readOnlyRoot: true,
+          env: {},
+        });
+        expect(sandbox.docker.env).not.toHaveProperty("GH_CONFIG_DIR");
+        expect(sandbox.readOnlyResourceMounts).toBeUndefined();
+        const mounts = resolveSandboxMountSelection({
+          workspaceDir: sandbox.workspaceDir,
+          agentWorkspaceDir: sandbox.agentWorkspaceDir,
+          workdir: "/workspace",
+          workspaceAccess: sandbox.workspaceAccess,
+          binds: sandbox.docker.binds,
+        });
+        expect(mounts.mounts).toContainEqual(
+          expect.objectContaining({
+            hostPath: workspaceDir,
+            containerPath: "/workspace",
+            readOnly: workspaceAccess === "ro",
+          }),
+        );
+        expect(mounts.custom).toEqual([]);
+      },
+    );
+  },
+);

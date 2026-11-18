@@ -159,7 +159,8 @@ export async function completeCleanupBookkeeping(
           (!isCronRunSessionKey(draft.requesterSessionKey) ||
             (draft.delivery?.status === "discarded" &&
               draft.delivery.discardReason === "expired"))) ||
-          (draft.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
+          ((draft.cleanup !== "keep" || draft.retainOutcomeOnKeep !== true) &&
+            draft.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
             draft.suppressAnnounceReason !== "killed"));
       retireImmediately =
         retireAfterSettle &&

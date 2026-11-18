@@ -8,6 +8,9 @@ import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { MemoryAudience } from "./memory-provider-types.js";
 import type { PluginRequesterModels } from "./model-catalog.types.js";
+import type { OpenClawPluginToolMemory } from "./tool-memory.js";
+import type { OpenClawPluginToolSchedules } from "./tool-schedules.js";
+import type { OpenClawPluginToolScopedTasks } from "./tool-scoped-tasks.js";
 
 export type OpenClawPluginActiveModelContext = {
   provider?: string;
@@ -134,6 +137,12 @@ type OpenClawPluginToolContextBase = {
   senderIsOwner?: boolean;
   /** Host-resolved memory partition for this turn. Providers must not reconstruct it. */
   memoryAudience?: MemoryAudience;
+  /** V2 host-bound project memory search; absent without session/audience/project authority. */
+  memory?: OpenClawPluginToolMemory;
+  /** V2 local native one-shot execution under the current creator tool policy. */
+  schedules?: OpenClawPluginToolSchedules;
+  /** V2 caller-bound native task admission with an explicit restricted tool budget. */
+  scopedTasks?: OpenClawPluginToolScopedTasks;
   /** Stable identity for one provider-owned pre-compaction flush cycle. */
   memoryFlush?: { flushId: string };
   /** Rejects a retained audience after any captured session incarnation changes. */

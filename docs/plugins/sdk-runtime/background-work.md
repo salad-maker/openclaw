@@ -544,9 +544,48 @@ closes. This does not sandbox trusted in-process plugin code.
 
     `promptMode: "minimal"` selects the bounded subagent prompt instead of the full conversation prompt. The plugin runtime exposes only this mode; omission keeps the full prompt. Use `disableTools: true` as well when the run must have an exact empty tool surface.
 
+    `timeoutSeconds` optionally sets the native execution deadline to an integer
+    from 1 through 300 seconds. It is passed to the native agent admission and
+    persisted run budget; it is independent of the observation timeout supplied
+    to `waitForRun`. Zero, nonfinite values and unlimited deadlines are rejected.
+
     `completionDelivery: "current-requester"` is default-off and is only available while a `before_dispatch` hook is handling an authenticated inbound request. OpenClaw captures the resolved requester session and delivery route before invoking the plugin, then delivers the subagent completion through the normal announce path. Plugins cannot provide or override requester lineage or destination fields. Calls outside that requester-bound hook context are rejected.
 
     `deleteSession(...)` can delete sessions created by the same plugin through `api.runtime.subagent.run(...)`. Deleting arbitrary user or operator sessions still requires an admin-scoped Gateway request.
+
+    Hosts exposing `subagent.getRun({ sessionKey, runId })` provide an exact,
+    retained native run observation, including execution status, terminal outcome,
+    timestamps and captured completion text with provenance. This survives loss of
+    the process-local `waitForRun` cache while the native registry retains the row.
+    A missing row returns `unknown`; an interrupted run is not success and must not
+    be redispatched on that evidence alone. Terminal execution can precede result
+    capture, so absence of `result` must not be treated as verified completion.
+    Every observation includes `ownedWorkPending`, using the native retained-work
+    owner to account for raw execution, disposal, commands and child cleanup.
+    A terminal row can coexist with pending work. Do not settle a goal, confirm
+    cancellation or permit deletion until `ownedWorkPending` is explicitly false.
+    Missing run evidence leaves this flag true.
+    Newly admitted plugin runs retain cancelled outcomes under the same
+    `cleanup: "keep"` policy as successful outcomes, including after the native
+    cancellation reconciliation grace. This does not shorten cleanup or make
+    cancellation acknowledgement terminal. Keep-mode rows currently have no
+    automatic archive TTL; explicit native session/registry cleanup can remove
+    them. Existing unmarked rows retain their previous retirement policy.
+
+    `subagent.cancelRun({ sessionKey, runId })` uses the existing exact-run abort
+    handler and ordinary caller permissions. `acknowledged` means the abort handler
+    accepted the request; only a later terminal `getRun` observation with outcome
+    `cancelled` and `ownedWorkPending: false` proves settled native cancellation. Natural completion remains `ok` even
+    after a cancellation request. `not-active` is not cancellation confirmation.
+
+    Both optional methods require a session created by the calling plugin and the
+    run's matching physical session ID and lifecycle revision. They retain live
+    host session access and invocation checks, reject replaced or legacy sessions
+    without verifiable identity, and do not grant the generic Gateway request
+    capability. Plugins must enforce their own principal/project scope before
+    using these methods. Keep native session and run records until results and
+    cancellation evidence have been captured; deletion or retention expiry removes
+    this observation source. No legacy record ownership is inferred or migrated.
 
   </Accordion>
 </AccordionGroup>
@@ -596,3 +635,103 @@ terminal persistence and the first completion handoff settle, call
 releases the execution drain obligation while retaining completion delivery
 authority. After a restart, recovery must capture fresh custody from a live
 registration and validate its requester; stored history never grants authority.
+
+## Authenticated one-shot plugin schedules
+
+Version 2 tool factories may receive `ctx.schedules` for a local authenticated
+owner with one prepared project identity. This capability delegates to the native
+`automations` tool, preserving its creator grants, inference authorization and
+final executable tool allowlist. The native automation tool must remain permitted
+in that final surface. A plugin service's broader `getCron()` authority is not a
+substitute for this agent-scoped admission.
+
+`admit({ intent, at, message, timeoutSeconds })` creates one isolated native cron
+execution with no tools, no delivery and retained history. `at` must be five
+seconds to seven days ahead; the execution timeout is 1–300 seconds and the
+message is at most 8,000 characters. These host-stamped schedules have no automatic
+one-shot retries. Native provider fallback within an execution is unchanged.
+
+The host derives the native job ID from the registered plugin, authenticated
+principal/agent/project scope and intent. Private creation provenance and a digest
+of the normalized execution definition are persisted atomically. Duplicate IDs
+cannot silently change or re-enable a prior job. Persist an immutable intent
+before calling admission, then retain its `{ id, intent }` receipt. After a lost
+acknowledgement, `resolve(intent)` only reads the exact recorded job; absence is
+not permission to repeat an ambiguous dispatch.
+
+`inspect(receipt)` retrieves the job, native run history and native settlement
+state. `history(receipt, runId)` uses the native exact run-to-transcript binding.
+`cancel(receipt)` disables the owned schedule and requests cancellation through
+the exact active cron owner. A requested cancellation is not confirmation that
+execution stopped or was interrupted. Preserve natural completion as such and
+retain the job until terminal evidence is reconciled. All operations recheck the
+current owner, plugin/project provenance and immutable execution definition;
+changed definitions or unavailable authority fail closed.
+
+Scheduled execution survives the initiating tool turn and plugin reload. Retain
+only receipts and outcomes across turns, not this invocation-bound capability.
+Later observation requires a fresh authorized tool context. No recurring jobs,
+arbitrary payloads, external event subscriptions or generic operator gateway
+access are exposed by this surface.
+
+## Caller-bound scoped native tasks
+
+Version 2 tool factories may receive `ctx.scopedTasks`, with `version: 1`.
+`prepare(request, { signal }?)` performs no dispatch. It validates an immutable
+plugin intent and returns an invocation-bound, one-use `run` closure plus planned
+`runId` and `sessionKey` correlation. Persist that correlation before calling
+`run`; a stored receipt does not authorize a later launch.
+
+The preparation request contains `intent` (a nonempty string up to 256 characters),
+`spec` (`role`, `tools`, `timeoutSeconds`, `maxToolCalls`, `handoff`),
+`workspace: "current-project"`, `sandbox: "required"`, and `network: "none"`.
+Supported tools are `read`, `write`, `edit` and `apply_patch`; reviewers may request
+only `read`. The deadline is 1–300 seconds and the tool-call budget is 1–32.
+`exec` is explicitly unavailable: a terminal model run does not establish that
+arbitrary detached processes have stopped. Arbitrary paths, identities, agents
+and models are not accepted.
+
+The invocation needs a current authenticated owner, one project, a completed
+final tool-surface capture, and permission for `sessions_spawn` and each requested
+tool. The parent must authorize the exact current project with a session-scoped
+Docker sandbox and writable workspace. Native spawn preserves sender restrictions
+and inherited denies, narrows its child allowlist to the exact requested names,
+and stamps required sandbox confinement. Parent permission mode remains unchanged,
+including an unset default; the child root is independently pinned to that project.
+Native file tools are rebuilt under that root and preserve stricter current or
+prepared read-only policy.
+
+After the durable execution claim, a host-owned grant narrows only that child's
+allocation to network `none`, no extra binds, a read-only root and no inherited
+browser, GitHub identity, environment, setup command, or copied skill corpus.
+Read-only tasks mount the same project read-only; file-writing tasks mount it
+writable. The grant expires with its exact native run. Ordinary role-required
+guests retain their existing read-only cap; parent configuration is unchanged.
+
+Call the prepared `run` with the exact planned `sessionKey`, the original intent
+as `idempotencyKey`, the exact timeout, a bounded `message`,
+`promptMode: "minimal"`, and `deliver: false`. This calls the ordinary native
+spawn owner; it does not start a second execution engine. The native session row
+atomically records create-only plugin intent and ownership. Launch failures retain
+that row so duplicates cannot overwrite it or redispatch an ambiguous launch.
+Native run registration retains correlated outcome evidence for the existing
+plugin-owned `getRun` and `cancelRun` operations.
+
+A run claims execution once in durable session state before model work. Re-entry,
+including after a crash, is refused; reconciliation retrieves evidence and never
+replays the task. Reset and the ordinary chat/reply path refuse scoped child
+sessions so they cannot discard or bypass the spent claim. The native tool-call budget spans the claimed run, including
+provider fallback, with one outer deadline. CLI, ACP and third-party harness
+paths cannot substitute an uncontrolled runner. Cancellation requested or
+acknowledged is not confirmation of interruption;
+retrieve terminal native evidence and preserve natural completion as such.
+
+This source proposal requires the native ownership and budget changes together.
+It is not an installed-host capability claim. Verification must separately cover
+caller-policy fixtures, native storage, authenticated gateway admission, sandboxed
+file tools, and cancellation before a deployment is approved.
+
+Once any scoped task is admitted, disable the plugin to roll back its availability
+while preserving the patched host's run guards and persisted state. Downgrading
+to a host that does not understand the spent execution claim could permit a later
+generic session follow-up to bypass that guard, even after the original run settled.

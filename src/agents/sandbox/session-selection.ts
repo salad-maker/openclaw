@@ -5,6 +5,7 @@ import { resolveSubagentSessionAttachmentRootDir } from "../subagents/subagent-a
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { hashTextSha256 } from "./hash.js";
 import type { resolveSandboxRuntimeStatus } from "./runtime-status.js";
+import { resolveScopedTaskSandboxConfig } from "./scoped-task-workspace.js";
 
 /** Resolve existing namespace policy without creating a workspace or a runtime. */
 export async function resolveSandboxSession(params: {
@@ -50,10 +51,16 @@ export async function resolveSandboxSession(params: {
   }
   // Docker and browser backends replace shared scope keys with a literal name;
   // agent scope lets the prepared isolation subject own every sandbox resource.
-  const cfg = runtime.sandboxRequired
-    ? { ...configured, scope: "agent" as const, workspaceAccess: runtime.workspaceAccess }
-    : librarySelections?.length
-      ? { ...configured, scope: "agent" as const }
-      : configured;
+  const cfg =
+    resolveScopedTaskSandboxConfig({
+      agentId: runtime.agentId,
+      sessionKey: rawSessionKey,
+      configured,
+    }) ??
+    (runtime.sandboxRequired
+      ? { ...configured, scope: "agent" as const, workspaceAccess: runtime.workspaceAccess }
+      : librarySelections?.length
+        ? { ...configured, scope: "agent" as const }
+        : configured);
   return { rawSessionKey, runtime, cfg };
 }

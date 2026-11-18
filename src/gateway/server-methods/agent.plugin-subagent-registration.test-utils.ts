@@ -55,6 +55,7 @@ export function registerPluginSubagentRequesterLineageCase() {
         requesterDisplayKey: requester.sessionKey,
         requesterOrigin: requester.origin,
         label: "plugin:memory-core",
+        retainOutcomeOnKeep: true,
       });
       expectRecordFields(run.completion, { required: true });
     });

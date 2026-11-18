@@ -19,6 +19,7 @@ import type { SessionCreatedActor } from "../../config/sessions/session-entry-pr
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { CronService } from "../../cron/service.js";
 import { createNoopLogger } from "../../cron/service.test-harness.js";
+import type { CronServiceDeps } from "../../cron/service/state.js";
 import { loadCronStore } from "../../cron/store.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
@@ -172,6 +173,7 @@ export async function inRun<T>(
 export function createCronFixture(
   listConfiguredChannels: () => Promise<string[]> = async () => [],
   config: OpenClawConfig = cfg,
+  runIsolatedAgentJob?: CronServiceDeps["runIsolatedAgentJob"],
 ) {
   const storePath = path.join(stateDir, "cron", "jobs.json");
   cron = new CronService({
@@ -182,7 +184,7 @@ export function createCronFixture(
     defaultAgentId: "main",
     log: createNoopLogger(),
     enqueueSystemEvent: vi.fn(),
-    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    runIsolatedAgentJob: runIsolatedAgentJob ?? vi.fn(async () => ({ status: "ok" as const })),
     listConfiguredChannels,
   });
   const context = createDirectChatContext({

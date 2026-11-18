@@ -30,6 +30,7 @@ export const SESSION_ENTRY_PRIVATE_CLEAR_PATCH = {
 
 const PRIVATE_SESSION_ENTRY_KEYS = [
   "localWorkspaceHandoff",
+  "pluginScopedTask",
   "inheritedGitContributorProfileIds",
   "profileInvolvement",
   "cliHistoryBoundary",

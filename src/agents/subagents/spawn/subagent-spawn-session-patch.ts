@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isAbsolute } from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { acquireSessionActorStorage } from "../../../config/sessions/session-actor-storage-acquisition.js";
 import {
@@ -9,6 +10,7 @@ import {
   buildSessionCreationStamp,
   inheritSessionGitContributorProfileIds,
 } from "../../../config/sessions/session-entry-provenance.js";
+import { captureSessionEntrySourceAssertion } from "../../../config/sessions/session-entry-source-authority.js";
 import {
   sessionEntryCommitGuardOptions,
   composeSessionSourceAssertion,
@@ -51,6 +53,7 @@ import { inheritedToolAllowPatch, inheritedToolDenyPatch } from "../../inherited
 import { readSessionToolUsageRankingSnapshot } from "../../session-tool-usage-snapshot.js";
 import type { resolveSpawnAdmission } from "../../spawn-plan.js";
 import type { PreparedSessionPermissionPolicy } from "../../tool-fs-policy.types.js";
+import type { ScopedTaskSpawnAuthority } from "./scoped-task-authority.js";
 import { captureSpawnParentLineage } from "./spawn-parent-lineage.js";
 import { withSubagentSessionSource } from "./subagent-session-source.js";
 import type { SpawnSubagentParams } from "./subagent-spawn-contract.js";
@@ -70,6 +73,7 @@ type InitialSubagentSession = {
 };
 
 export async function createInitialSubagentSession(input: {
+  scopedTask?: ScopedTaskSpawnAuthority;
   cfg: OpenClawConfig;
   /** Operator (or creator role) the spawn acts for; bounds projectId and inherited sources. */
   projectRequester: ProjectRequester;
@@ -306,6 +310,41 @@ export async function createInitialSubagentSession(input: {
             initialChildSessionPatch.pendingWorktree = preparedWorktree.pendingWorktree;
           }
           const commit = async (assertSourceCurrent?: SessionSourceAssertion) => {
+            const scopedTask = params.scopedTask;
+            scopedTask?.assertCurrent();
+            if (
+              scopedTask &&
+              (params.incognito ||
+                params.worktree ||
+                params.creationPolicy.sandbox !== "required" ||
+                !params.spawnedWorkspaceDir ||
+                !isAbsolute(params.spawnedWorkspaceDir) ||
+                params.spawnedWorkspaceDir !== scopedTask.workspaceDir ||
+                params.requesterAgentId !== params.targetAgentId ||
+                scopedTask.childSessionKey !== params.childSessionKey)
+            ) {
+              throw new Error(
+                "Scoped native task creation requires its exact same-agent persistent child",
+              );
+            }
+            // The native row is the immutable intent. A retained row, including
+            // one with no acknowledged run, must never be overwritten/replayed.
+            const assertAbsent = scopedTask
+              ? captureSessionEntrySourceAssertion({
+                  scope: {
+                    ...childScope,
+                    storePath: physicalStorePath,
+                  },
+                  expected: undefined,
+                  fields: ["sessionId"],
+                  assertCurrent: scopedTask.assertCurrent,
+                  refuse: () => {
+                    throw new Error(
+                      "Scoped task intent already exists; reconcile without redispatch",
+                    );
+                  },
+                })
+              : undefined;
             const write = () =>
               upsertSessionEntryCore(
                 {
@@ -314,6 +353,13 @@ export async function createInitialSubagentSession(input: {
                 },
                 {
                   ...initialChildSessionPatch,
+                  ...(scopedTask
+                    ? {
+                        pluginOwnerId: scopedTask.pluginId,
+                        pluginScopedTask: structuredClone(scopedTask.descriptor),
+                        sessionRoot: params.spawnedWorkspaceDir,
+                      }
+                    : {}),
                   // Native spawn keeps agent RPC label semantics, not sessions.patch's uniqueness policy.
                   ...(params.label ? { label: params.label } : {}),
                   ...(params.sessionPermissionPolicy
@@ -365,6 +411,7 @@ export async function createInitialSubagentSession(input: {
                     params.assertActive,
                     assertSourceCurrent,
                     assertDraftCreationAllowed,
+                    assertAbsent,
                   ]),
                 ),
               );

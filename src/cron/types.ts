@@ -464,6 +464,8 @@ export type CronToolsAllowProvenance =
 export type CronStoredJob = Omit<CronJob, "streamExecutionHost" | "payloadSource"> & {
   /** Immutable host-captured scheduled command invocation; never public create/patch input. */
   pluginCommand?: PluginCommandSchedule;
+  /** Immutable host-issued plugin schedule ownership; never accepted from wire input. */
+  pluginSchedule?: { pluginId: string; scope: string; intent: string; definition: string };
   /** Original authenticated source for a same-conversation continuation, never a public grant. */
   operatorSource?: {
     source: import("../gateway/operator-run-recovery-source.codec.js").RestartRecoveryOperatorSource;

@@ -499,3 +499,42 @@ describe("plugin session ownership", () => {
     expect(readEntry()?.label).toBeUndefined();
   });
 });
+test("scoped task reset refuses before cleanup and preserves the spent private claim", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const key = "agent:main:subagent:scoped-spent";
+  const pluginScopedTask = {
+    version: 1 as const,
+    intentSha256: "intent",
+    scopeSha256: "scope",
+    requestSha256: "request",
+    runId: "scoped-run",
+    tools: ["read"],
+    maxToolCalls: 1,
+    timeoutSeconds: 5,
+    executionStartedAt: 1,
+  };
+  const entry = {
+    ...sessionStoreEntry("spent-session", { pluginOwnerId: "coordination" }),
+    pluginScopedTask,
+  };
+  await replaceSessionEntry({ sessionKey: key, storePath }, entry);
+  const prepareLifecycle = vi.fn();
+  const { performGatewaySessionReset } = await import("./session-reset-service.js");
+  const result = await performGatewaySessionReset({
+    key,
+    reason: "reset",
+    commandSource: "gateway:sessions.reset",
+    workerPlacementContext: {},
+    authorizedPluginId: "coordination",
+    prepareLifecycle,
+  });
+  expect(result).toMatchObject({
+    ok: false,
+    error: { message: expect.stringContaining("cannot be reset") },
+  });
+  expect(prepareLifecycle).not.toHaveBeenCalled();
+  expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
+    sessionId: "spent-session",
+    pluginScopedTask,
+  });
+});

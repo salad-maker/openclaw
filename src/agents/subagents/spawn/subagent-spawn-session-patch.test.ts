@@ -474,3 +474,72 @@ it("commits group and delivery facts with creation for one host-bound admission"
     expect(takeInProcessFreshChildSession(request)).toBeUndefined();
   });
 });
+
+it("atomically retains one plugin-owned immutable intent under concurrent creation and replay", async () => {
+  await withOpenClawTestState({ label: "scoped-native-intent" }, async () => {
+    const sessionKey = "agent:main:parent";
+    const childSessionKey = "agent:main:subagent:scoped-intent";
+    const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    await upsertSessionEntryCore(
+      { storePath, sessionKey },
+      {
+        sessionId: "parent",
+        lifecycleRevision: "parent-revision",
+        updatedAt: 1,
+      },
+    );
+    const descriptor = {
+      version: 1 as const,
+      scopeSha256: "scope",
+      intentSha256: "intent",
+      requestSha256: "request",
+      runId: "scoped-run",
+      maxToolCalls: 2,
+      timeoutSeconds: 30,
+      tools: ["read", "write"],
+    };
+    const input = {
+      requesterInternalKey: sessionKey,
+      childSessionKey,
+      expectedParentSessionId: "parent",
+      senderIsOwner: true,
+      creationPolicy: {
+        actor: { type: "agent" as const, id: "main" },
+        sandbox: "required" as const,
+      },
+      spawnedWorkspaceDir: "/fixture/project",
+      inheritedToolAllowlist: ["read", "write"],
+      inheritedToolDenylist: ["message"],
+      scopedTask: {
+        pluginId: "fixture-plugin",
+        childSessionKey,
+        workspaceDir: "/fixture/project",
+        descriptor,
+        assertCurrent() {},
+      },
+    };
+    expect(await spawn({ ...input, spawnedWorkspaceDir: "/other/project" })).toMatchObject({
+      status: "error",
+    });
+    expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toBeUndefined();
+    const results = await Promise.all([spawn(input), spawn(input)]);
+    expect(results.filter((result) => result.status === "ok")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "error")).toHaveLength(1);
+    const before = loadSessionEntry({ storePath, sessionKey: childSessionKey });
+    expect(before).toMatchObject({
+      pluginOwnerId: "fixture-plugin",
+      inheritedToolAllow: ["read", "write"],
+      inheritedToolDeny: ["message"],
+      spawnedBy: sessionKey,
+      sessionRoot: "/fixture/project",
+    });
+    expect(before?.permissionMode).toBeUndefined();
+    expect(
+      await spawn({
+        ...input,
+        scopedTask: { ...input.scopedTask, pluginId: "other-plugin" },
+      }),
+    ).toMatchObject({ status: "error" });
+    expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toEqual(before);
+  });
+});

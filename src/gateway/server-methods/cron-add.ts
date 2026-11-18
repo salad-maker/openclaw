@@ -16,6 +16,10 @@ import { cronJobUsesToolRuntime } from "../../cron/tools-allow.js";
 import type { CronDeliveryPreview, CronJobCreate } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  capturePluginScheduleAuthority,
+  pluginScheduleId,
+} from "../../plugins/plugin-schedule-authority.js";
 import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import {
   applyCronCreateCallerScopeDefault,
@@ -150,7 +154,12 @@ export const cronAddHandler: GatewayRequestHandler = async ({
     return;
   }
   let creatorOptions: Awaited<ReturnType<typeof captureCronCreatorSession>> | undefined;
+  const pluginSchedule = capturePluginScheduleAuthority();
+  if (pluginSchedule) {
+    jobCreate.id = pluginScheduleId(pluginSchedule.ownership);
+  }
   const commitGuard = () => {
+    pluginSchedule?.assertCurrent();
     commandCreation.creation?.assertCurrent();
     assertMutationCurrent?.();
     capture?.assertCurrent();
@@ -226,6 +235,7 @@ export const cronAddHandler: GatewayRequestHandler = async ({
           execPolicy,
           sessionEntryCurrent: creator.sessionEntryCurrent,
 
+          ...(pluginSchedule ? { pluginSchedule: pluginSchedule.ownership } : {}),
           enabledExplicit,
           ...creatorOptions,
           ...(commandCreation.creation

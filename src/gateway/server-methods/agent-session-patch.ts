@@ -242,6 +242,9 @@ export async function buildAgentSessionPatch(params: {
     !freshSessionRotatedSinceLoad &&
     patchSessionId === params.freshEntry?.sessionId;
   const patch: Partial<SessionEntry> = {
+    // Plugin subagents enter through agent RPC rather than sessions.create. Capture
+    // their original incarnation before registration; never adopt legacy rows.
+    ...(params.freshEntry === undefined ? { lifecycleRevision: randomUUID() } : {}),
     ...(automaticResetReason && params.freshEntry
       ? { ...clearRotatedSessionMetadata(params.freshEntry), agentHarnessId: undefined }
       : {}),

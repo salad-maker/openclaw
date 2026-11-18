@@ -82,3 +82,30 @@ export function createPluginRuntimeFacades(invokeSelectedRuntime: <T>(run: () =>
     ]),
   };
 }
+
+export function createScopedSubagentMethods(
+  subagent: PluginRuntime["subagent"],
+  runWithPluginScope: <T>(run: () => T) => T,
+) {
+  return {
+    complete: (params) => runWithPluginScope(() => subagent.complete(params)),
+    forkSession: (params) => runWithPluginScope(() => subagent.forkSession(params)),
+    waitForRun: (params) => runWithPluginScope(() => subagent.waitForRun(params)),
+    ...(subagent.getRun
+      ? {
+          getRun: (params: Parameters<NonNullable<typeof subagent.getRun>>[0]) =>
+            runWithPluginScope(() => subagent.getRun!(params)),
+        }
+      : {}),
+    ...(subagent.cancelRun
+      ? {
+          cancelRun: (params: Parameters<NonNullable<typeof subagent.cancelRun>>[0]) =>
+            runWithPluginScope(() => subagent.cancelRun!(params)),
+        }
+      : {}),
+    getSessionMessages: (params) => runWithPluginScope(() => subagent.getSessionMessages(params)),
+  } satisfies Pick<
+    PluginRuntime["subagent"],
+    "complete" | "forkSession" | "waitForRun" | "getRun" | "cancelRun" | "getSessionMessages"
+  >;
+}

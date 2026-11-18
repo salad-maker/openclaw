@@ -12,6 +12,7 @@ import type {
 
 /** Caller-specific declaration-key visibility and explicit enablement metadata. */
 export type CronAddOptions = {
+  pluginSchedule?: CronStoredJob["pluginSchedule"];
   /** Validated host invocation facts; immutable after fresh command-job creation. */
   pluginCommand?: CronStoredJob["pluginCommand"];
   /** Captured source digest of the admitting plugin instance; enables restart continuity. */

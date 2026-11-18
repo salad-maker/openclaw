@@ -11,7 +11,10 @@ const settlingCronTaskRuns = new Map<Promise<unknown>, { retirementTimer?: NodeJ
 const activeCronTaskRunDrainWaiters = new Set<() => void>();
 // Restart drain may retire an abort-ignoring core after a bounded grace, but a
 // host snapshot must keep refusing readiness until that core actually settles.
-const suspensionVisibleCronTaskRuns = new Map<Promise<unknown>, string | undefined>();
+const suspensionVisibleCronTaskRuns = new Map<
+  Promise<unknown>,
+  { agentId?: string; jobId?: string }
+>();
 const CRON_TASK_RUN_SETTLEMENT_TRACKING_MAX_MS = 60_000;
 
 function notifyActiveCronTaskRunDrainWaitersIfEmpty(): void {
@@ -100,9 +103,10 @@ export function trackActiveCronTaskRunSettlement(
   promise: Promise<unknown>,
   abortSignal?: AbortSignal,
   agentId?: string,
+  jobId?: string,
 ): void {
   settlingCronTaskRuns.set(promise, {});
-  suspensionVisibleCronTaskRuns.set(promise, agentId);
+  suspensionVisibleCronTaskRuns.set(promise, { agentId, jobId });
   // Cancellation belongs to this core only; sibling jobs must remain drain-visible.
   const startSettlementGrace = () => startActiveCronTaskRunSettlementGrace(promise);
   abortSignal?.addEventListener("abort", startSettlementGrace, { once: true });
@@ -129,13 +133,24 @@ export function getSuspensionVisibleCronTaskRunCount(scope?: { agentId: string }
     return suspensionVisibleCronTaskRuns.size;
   }
   let count = 0;
-  for (const agentId of suspensionVisibleCronTaskRuns.values()) {
+  for (const { agentId } of suspensionVisibleCronTaskRuns.values()) {
     // An unclassified core cannot establish that an agent's filesystem is safe.
     if (!agentId || agentId === scope.agentId) {
       count += 1;
     }
   }
   return count;
+}
+
+/** An aborted native outcome is not evidence that its owned core has settled. */
+export function hasUnsettledCronTaskRunForJob(jobId: string): boolean {
+  for (const scope of suspensionVisibleCronTaskRuns.values()) {
+    // A pre-upgrade/unclassified core cannot prove this job's cleanup is safe.
+    if (!scope.jobId || scope.jobId === jobId) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Retires restart-drain bookkeeping without hiding still-running cores from suspension. */

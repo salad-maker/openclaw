@@ -5,6 +5,9 @@ import { resolveMemoryCapabilityRegistration } from "./memory-state.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { capturePluginLifecycleAuthority } from "./registry-lifecycle.js";
 import type { PluginRegistry, PluginToolRegistration } from "./registry-types.js";
+import { createPluginToolMemory } from "./tool-memory.js";
+import { createPluginToolSchedules } from "./tool-schedules.js";
+import { createPluginToolScopedTasks } from "./tool-scoped-tasks.js";
 import type { OpenClawPluginToolContext } from "./tool-types.js";
 
 /** Host-only identity binding; registration opt-in never creates this authority. */
@@ -56,7 +59,7 @@ export function createPluginToolFactoryContext(params: {
     continuation?.assertCurrent();
     assertMemoryAudienceCurrent?.();
   };
-  return {
+  const boundContext: OpenClawPluginToolContext = {
     ...context,
     ...(entry.contextVersion === 2
       ? params.bindExecutionCapabilities?.(
@@ -80,5 +83,18 @@ export function createPluginToolFactoryContext(params: {
       entry.contextVersion === 2 || params.assertInvocationCurrent || continuation
         ? assertInvocationCurrent
         : undefined,
+    memory:
+      entry.contextVersion === 2
+        ? createPluginToolMemory(context, assertInvocationCurrent)
+        : undefined,
   };
+  boundContext.schedules =
+    entry.contextVersion === 2
+      ? createPluginToolSchedules(context, boundContext, entry.pluginId, assertInvocationCurrent)
+      : undefined;
+  boundContext.scopedTasks =
+    entry.contextVersion === 2
+      ? createPluginToolScopedTasks(context, boundContext, assertInvocationCurrent, entry.pluginId)
+      : undefined;
+  return boundContext;
 }

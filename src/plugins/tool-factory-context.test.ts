@@ -282,6 +282,19 @@ it.each([false, true])(
   },
 );
 
+it("never preserves a supplied memory capability without host audience authority", () => {
+  const { entry, registry } = register({ contextVersion: 2, create: () => null });
+  const suppliedMemory = { search: vi.fn(async () => ({ hits: [] })) };
+  const context = createPluginToolFactoryContext({
+    entry,
+    registry,
+    context: { memory: suppliedMemory },
+    assertInvocationCurrent: () => {},
+  });
+  expect(context.memory).toBeUndefined();
+  expect(suppliedMemory.search).not.toHaveBeenCalled();
+});
+
 it("rejects an operational caller that has no live receipt authority", async () => {
   await withGatewayToolCallerIdentity(
     {

@@ -56,6 +56,11 @@ import type {
 } from "./command/types.js";
 import { createInternalSessionEffectsCleanup } from "./internal-session-effects.js";
 import { withAgentPluginRegistry } from "./runtime-plugins.js";
+import {
+  runWithScopedTaskExecution,
+  restrictScopedTaskCommandTools,
+  scopedTaskExecutionParams,
+} from "./scoped-task-execution.js";
 import { beginForegroundSessionMaintenance } from "./session-maintenance/coordinator.js";
 import {
   scheduleSessionMaintenance,
@@ -230,330 +235,352 @@ async function agentCommandInternalOwned(
         sessionEntry = entry;
       },
     });
-    return await sessionWorkAdmission.run(async () => {
-      sessionEntry = await repairAgentCommandSessionTranscript({
-        prepared,
-        sessionEntry,
-        suppressVisibleSessionEffects,
-        diagnosticError,
-        warn: (message) => log.warn(message),
-      });
-      if (opts.deliver === true) {
-        const sendPolicy = resolveSendPolicy({
-          cfg,
-          entry: sessionEntry,
-          sessionKey,
-          channel: sessionDeliveryChannel(sessionEntry),
-          chatType: sessionEntry?.chatType,
-        });
-        if (sendPolicy === "deny") {
-          throw new Error("send blocked by session policy");
-        }
-      }
-
-      if (!isRawModelRun && acpResolution?.kind === "stale") {
-        throw acpResolution.error;
-      }
-
-      let currentRunDeliveryPrepared = false;
-      const prepareDeliveryForRun = async (candidateSessionEntry?: typeof sessionEntry) => {
-        if (currentRunDeliveryPrepared || opts.deliver !== true) {
-          return;
-        }
-        currentRunDeliveryPrepared = true;
-        let preparedDelivery: Awaited<ReturnType<typeof prepareCurrentRunDelivery>>;
-        try {
-          preparedDelivery = await prepareCurrentRunDelivery({
-            cfg,
-            opts,
-            agentId: sessionAgentId,
-            currentSessionKey: sessionKey,
-            sessionEntry: candidateSessionEntry,
-          });
-        } catch (error) {
-          if (opts.bestEffortDeliver !== true) {
-            throw error;
-          }
-          log.warn(
-            `delivery preflight failed; continuing model run with requested delivery intent because bestEffortDeliver is enabled: ${diagnosticError(error)}`,
-          );
-        }
-        assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-        if (preparedDelivery) {
-          currentRunDeliveryContext = preparedDelivery.context;
-          opts = {
-            ...opts,
-            replyChannel: preparedDelivery.context.channel,
-            replyTo: preparedDelivery.context.to,
-            replyAccountId: preparedDelivery.context.accountId,
-            threadId: preparedDelivery.context.threadId,
-            deliveryTargetMode: preparedDelivery.targetMode,
-          };
-        }
-      };
-
-      if (sessionStore && sessionKey && !suppressVisibleSessionEffects) {
-        const now = Date.now();
-        const currentStoreEntry = sessionStore[sessionKey];
-        const allowCreate = currentStoreEntry === undefined && sessionEntry === undefined;
-        // A local operator's own root records the direct chat type that
-        // operator-created Gateway roots receive, so memory audience resolves.
-        const initialEntry = currentStoreEntry ??
-          sessionEntry ?? {
-            sessionId,
-            updatedAt: now,
-            sessionStartedAt: now,
-            ...(opts.operatorDirectRoot ? { chatType: "direct" as const } : {}),
-          };
-        const isSessionRollover =
-          isNewSession && (initialEntry.sessionId !== sessionId || automaticReset !== undefined);
-        const entry = isSessionRollover ? clearRotatedSessionMetadata(initialEntry) : initialEntry;
-        if (automaticReset) {
-          entry.lifecycleRevision = randomUUID();
-          entry.agentHarnessId = undefined;
-        }
-        await prepareDeliveryForRun(entry);
-        const nextEntry = {
-          ...entry,
-          sessionId,
-          updatedAt: now,
-          status: undefined,
-          abortedLastRun: false,
-          endedAt: undefined,
-          lastRunError: undefined,
-          sessionStartedAt: isSessionRollover ? now : entry.sessionStartedAt,
-          lastInteractionAt: isSessionRollover ? now : entry.lastInteractionAt,
-        };
-        assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-        const persisted = await persistAgentSession({
-          agentId: sessionAgentId,
-          sessionStore,
-          sessionKey,
-          storePath,
-          initialEntry,
-          entry: nextEntry,
-          ...(automaticReset
-            ? {
-                resetBoundary: {
-                  context: "preserve-tail" as const,
-                  reason: automaticReset.reason,
-                  cwd: cwd ?? workspaceDir,
-                },
-              }
-            : {}),
-          creation: operatorSession?.creation,
-          assertCommitAllowed: operatorSession?.assertCurrent,
-          shouldPersist: (current) => {
-            operatorSession?.assertAuthorized(current);
-            return (
-              (!automaticReset ||
-                current?.lifecycleRevision === automaticReset.expectedLifecycleRevision) &&
-              (current === undefined
-                ? allowCreate
-                : current.sessionId === (isSessionRollover ? initialEntry.sessionId : sessionId) &&
-                  current.lifecycleRevision === initialEntry.lifecycleRevision)
-            );
+    return await sessionWorkAdmission.run(() =>
+      runWithScopedTaskExecution(
+        {
+          ...scopedTaskExecutionParams(prepared, sessionEntry, lifecycleAbortController),
+          assertCurrent: () => {
+            assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+            opts.assertSourceCurrent?.();
           },
-        });
-        // The commit already happened. Cleanup must retain ownership even if
-        // cancellation invalidates the task during the awaited session write.
-        sessionEntry = persisted;
-        if (automaticReset && persisted) {
-          clearCommittedSessionResetRuntimeState({
-            previousSessionEntry: initialEntry,
-            agentId: sessionAgentId,
-            sessionKey,
-            storePath,
-            signal: opts.abortSignal,
-            onError: (error) =>
-              log.warn(`Failed to clear reset runtime state: ${diagnosticError(error)}`),
+          onClaimed: (entry, tools) => {
+            sessionEntry = entry;
+            if (sessionStore && sessionKey) {
+              sessionStore[sessionKey] = entry;
+            }
+            opts = restrictScopedTaskCommandTools(opts, tools);
+          },
+        },
+        async () => {
+          sessionEntry = await repairAgentCommandSessionTranscript({
+            prepared,
+            sessionEntry,
+            suppressVisibleSessionEffects,
+            diagnosticError,
+            warn: (message) => log.warn(message),
           });
-        }
-        if (operatorSession && (!persisted || persisted.sessionId !== sessionId)) {
-          throw createSessionWorkStartChangedError(sessionKey);
-        }
-        operatorSession?.assertAuthorized(persisted);
-      }
-      if (sessionEntry && sessionKey && !suppressVisibleSessionEffects) {
-        sessionEntry = await prepareCommandSessionDiffBaseline({
-          agentId: sessionAgentId,
-          cwd: cwd ?? workspaceDir,
-          entry: sessionEntry,
-          isNewSession,
-          sessionKey,
-          storePath,
-          sessionStore,
-        });
-      }
-      await prepareDeliveryForRun(sessionEntry);
+          if (opts.deliver === true) {
+            const sendPolicy = resolveSendPolicy({
+              cfg,
+              entry: sessionEntry,
+              sessionKey,
+              channel: sessionDeliveryChannel(sessionEntry),
+              chatType: sessionEntry?.chatType,
+            });
+            if (sendPolicy === "deny") {
+              throw new Error("send blocked by session policy");
+            }
+          }
 
-      if (!isRawModelRun && acpResolution?.kind === "ready" && sessionKey) {
-        assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-        preparedRunAdmission = prepareAgentCommandExecutionIdentity({
-          opts,
-          prepared,
-          ingress: admissionIngress,
-          lifecycleGeneration,
-        });
-        return await runAcpAgentCommand({
-          ...preparedContext,
-          deps: resolvedDeps,
-          runtime,
-          opts,
-          sessionEntry,
-          suppressVisibleSessionEffects,
-          provenance: isSubagentLane ? "agent" : sessionStateActor.actorType,
-          sessionKey,
-          lifecycleGeneration,
-          acpResolution,
-          trackInternalModelRunTarget,
-          preparedRunAdmission,
-        });
-      }
+          if (!isRawModelRun && acpResolution?.kind === "stale") {
+            throw acpResolution.error;
+          }
 
-      if (
-        !isRawModelRun &&
-        sessionKey &&
-        opts.inputProvenance?.kind === "inter_session" &&
-        opts.inputProvenance.sourceTool === "sessions_send"
-      ) {
-        // A sessions_send resume continues the session like an ordinary turn, so it adopts the
-        // passive notices queued since its last turn through the same drain owner. Other
-        // agent-method callers (CLI, hooks, completions) keep their existing behavior.
-        assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-        const { drainFormattedSystemEvents } =
-          await import("../auto-reply/reply/session-system-events.js");
-        const eventsBlock = await drainFormattedSystemEvents({
-          cfg,
-          agentId: sessionAgentId,
-          sessionKey,
-          // The channel summary introduces a new main conversation; a resume continues one.
-          isMainSession: false,
-          isNewSession: false,
-        });
-        if (eventsBlock) {
-          opts = {
-            ...opts,
-            runtimeContextFragments: [
-              ...(opts.runtimeContextFragments ?? []),
-              { kind: "conversation-data", text: eventsBlock },
-            ],
+          let currentRunDeliveryPrepared = false;
+          const prepareDeliveryForRun = async (candidateSessionEntry?: typeof sessionEntry) => {
+            if (currentRunDeliveryPrepared || opts.deliver !== true) {
+              return;
+            }
+            currentRunDeliveryPrepared = true;
+            let preparedDelivery: Awaited<ReturnType<typeof prepareCurrentRunDelivery>>;
+            try {
+              preparedDelivery = await prepareCurrentRunDelivery({
+                cfg,
+                opts,
+                agentId: sessionAgentId,
+                currentSessionKey: sessionKey,
+                sessionEntry: candidateSessionEntry,
+              });
+            } catch (error) {
+              if (opts.bestEffortDeliver !== true) {
+                throw error;
+              }
+              log.warn(
+                `delivery preflight failed; continuing model run with requested delivery intent because bestEffortDeliver is enabled: ${diagnosticError(error)}`,
+              );
+            }
+            assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+            if (preparedDelivery) {
+              currentRunDeliveryContext = preparedDelivery.context;
+              opts = {
+                ...opts,
+                replyChannel: preparedDelivery.context.channel,
+                replyTo: preparedDelivery.context.to,
+                replyAccountId: preparedDelivery.context.accountId,
+                threadId: preparedDelivery.context.threadId,
+                deliveryTargetMode: preparedDelivery.targetMode,
+              };
+            }
           };
-        }
-      }
-      const embeddedSessionState = await measureAgentStartup(
-        "session-state",
-        () =>
-          prepareEmbeddedSessionState({
-            ...preparedContext,
+
+          if (sessionStore && sessionKey && !suppressVisibleSessionEffects) {
+            const now = Date.now();
+            const currentStoreEntry = sessionStore[sessionKey];
+            const allowCreate = currentStoreEntry === undefined && sessionEntry === undefined;
+            // A local operator's own root records the direct chat type that
+            // operator-created Gateway roots receive, so memory audience resolves.
+            const initialEntry = currentStoreEntry ??
+              sessionEntry ?? {
+                sessionId,
+                updatedAt: now,
+                sessionStartedAt: now,
+                ...(opts.operatorDirectRoot ? { chatType: "direct" as const } : {}),
+              };
+            const isSessionRollover =
+              isNewSession &&
+              (initialEntry.sessionId !== sessionId || automaticReset !== undefined);
+            const entry = isSessionRollover
+              ? clearRotatedSessionMetadata(initialEntry)
+              : initialEntry;
+            if (automaticReset) {
+              entry.lifecycleRevision = randomUUID();
+              entry.agentHarnessId = undefined;
+            }
+            await prepareDeliveryForRun(entry);
+            const nextEntry = {
+              ...entry,
+              sessionId,
+              updatedAt: now,
+              status: undefined,
+              abortedLastRun: false,
+              endedAt: undefined,
+              lastRunError: undefined,
+              sessionStartedAt: isSessionRollover ? now : entry.sessionStartedAt,
+              lastInteractionAt: isSessionRollover ? now : entry.lastInteractionAt,
+            };
+            assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+            const persisted = await persistAgentSession({
+              agentId: sessionAgentId,
+              sessionStore,
+              sessionKey,
+              storePath,
+              initialEntry,
+              entry: nextEntry,
+              ...(automaticReset
+                ? {
+                    resetBoundary: {
+                      context: "preserve-tail" as const,
+                      reason: automaticReset.reason,
+                      cwd: cwd ?? workspaceDir,
+                    },
+                  }
+                : {}),
+              creation: operatorSession?.creation,
+              assertCommitAllowed: operatorSession?.assertCurrent,
+              shouldPersist: (current) => {
+                operatorSession?.assertAuthorized(current);
+                return (
+                  (!automaticReset ||
+                    current?.lifecycleRevision === automaticReset.expectedLifecycleRevision) &&
+                  (current === undefined
+                    ? allowCreate
+                    : current.sessionId ===
+                        (isSessionRollover ? initialEntry.sessionId : sessionId) &&
+                      current.lifecycleRevision === initialEntry.lifecycleRevision)
+                );
+              },
+            });
+            // The commit already happened. Cleanup must retain ownership even if
+            // cancellation invalidates the task during the awaited session write.
+            sessionEntry = persisted;
+            if (automaticReset && persisted) {
+              clearCommittedSessionResetRuntimeState({
+                previousSessionEntry: initialEntry,
+                agentId: sessionAgentId,
+                sessionKey,
+                storePath,
+                signal: opts.abortSignal,
+                onError: (error) =>
+                  log.warn(`Failed to clear reset runtime state: ${diagnosticError(error)}`),
+              });
+            }
+            if (operatorSession && (!persisted || persisted.sessionId !== sessionId)) {
+              throw createSessionWorkStartChangedError(sessionKey);
+            }
+            operatorSession?.assertAuthorized(persisted);
+          }
+          if (sessionEntry && sessionKey && !suppressVisibleSessionEffects) {
+            sessionEntry = await prepareCommandSessionDiffBaseline({
+              agentId: sessionAgentId,
+              cwd: cwd ?? workspaceDir,
+              entry: sessionEntry,
+              isNewSession,
+              sessionKey,
+              storePath,
+              sessionStore,
+            });
+          }
+          await prepareDeliveryForRun(sessionEntry);
+
+          if (!isRawModelRun && acpResolution?.kind === "ready" && sessionKey) {
+            assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+            preparedRunAdmission = prepareAgentCommandExecutionIdentity({
+              opts,
+              prepared,
+              ingress: admissionIngress,
+              lifecycleGeneration,
+            });
+            return await runAcpAgentCommand({
+              ...preparedContext,
+              deps: resolvedDeps,
+              runtime,
+              opts,
+              sessionEntry,
+              suppressVisibleSessionEffects,
+              provenance: isSubagentLane ? "agent" : sessionStateActor.actorType,
+              sessionKey,
+              lifecycleGeneration,
+              acpResolution,
+              trackInternalModelRunTarget,
+              preparedRunAdmission,
+            });
+          }
+
+          if (
+            !isRawModelRun &&
+            sessionKey &&
+            opts.inputProvenance?.kind === "inter_session" &&
+            opts.inputProvenance.sourceTool === "sessions_send"
+          ) {
+            // A sessions_send resume continues the session like an ordinary turn, so it adopts the
+            // passive notices queued since its last turn through the same drain owner. Other
+            // agent-method callers (CLI, hooks, completions) keep their existing behavior.
+            assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+            const { drainFormattedSystemEvents } =
+              await import("../auto-reply/reply/session-system-events.js");
+            const eventsBlock = await drainFormattedSystemEvents({
+              cfg,
+              agentId: sessionAgentId,
+              sessionKey,
+              // The channel summary introduces a new main conversation; a resume continues one.
+              isMainSession: false,
+              isNewSession: false,
+            });
+            if (eventsBlock) {
+              opts = {
+                ...opts,
+                runtimeContextFragments: [
+                  ...(opts.runtimeContextFragments ?? []),
+                  { kind: "conversation-data", text: eventsBlock },
+                ],
+              };
+            }
+          }
+          const embeddedSessionState = await measureAgentStartup(
+            "session-state",
+            () =>
+              prepareEmbeddedSessionState({
+                ...preparedContext,
+                opts,
+                sessionEntry,
+                lifecycleGeneration,
+                executionWorkspaceDir: cwd ?? workspaceDir,
+                watchSkills,
+                isSubagentLaneTurn: isSubagentLane,
+                suppressVisibleSessionEffects,
+                verboseDefault: (resolveAgentConfig(cfg, sessionAgentId)?.verboseDefault ??
+                  agentCfg?.verboseDefault) as VerboseLevel | undefined,
+                sessionStateActor,
+                ...(manifestMetadataSnapshot
+                  ? { pluginMetadataSnapshot: manifestMetadataSnapshot }
+                  : {}),
+              }),
+            { config: cfg },
+          );
+          ({ sessionEntry, opts } = embeddedSessionState);
+          const { requestedThinkLevel, runContext } = embeddedSessionState;
+
+          const modelSelection = await measureAgentStartup(
+            "model-selection",
+            () =>
+              resolveEmbeddedModelSelection({
+                ...preparedContext,
+                opts,
+                sessionEntry,
+                requestedThinkLevel,
+                suppressVisibleSessionEffects,
+                runContext,
+              }),
+            { config: cfg },
+          );
+          sessionEntry = modelSelection.sessionEntry;
+          const { prepared: attemptPrepared, admission } = await prepareCommandForegroundRun({
+            prepared,
+            opts,
+            sessionEntry,
+            embeddedSessionState,
+            modelSelection,
+            lifecycleGeneration,
+            ingress: admissionIngress,
+            suppressVisibleSessionEffects,
+            onCommittedSessionId: (committedSessionId) => {
+              runOwnedSessionId = committedSessionId;
+              recordCompactionSessionId(committedSessionId);
+            },
+          });
+          preparedRunAdmission = admission;
+          sessionEntry = attemptPrepared.sessionEntry;
+          if (attemptPrepared.sessionId !== runOwnedSessionId) {
+            runOwnedSessionId = attemptPrepared.sessionId;
+            recordCompactionSessionId(runOwnedSessionId);
+          }
+          const embeddedAttempt = await runEmbeddedAgentAttempt({
+            prepared: attemptPrepared,
             opts,
             sessionEntry,
             lifecycleGeneration,
-            executionWorkspaceDir: cwd ?? workspaceDir,
-            watchSkills,
-            isSubagentLaneTurn: isSubagentLane,
+            onLifecycleGenerationChanged: (nextLifecycleGeneration) => {
+              lifecycleGeneration = nextLifecycleGeneration;
+            },
+            onCompactionAccounting: (fact) => {
+              if (fact.kind === "durable") {
+                runOwnedSessionId = fact.target.sessionId;
+                if (fact.previousSessionId !== undefined) {
+                  recordCompactionSessionId(fact.target.sessionId);
+                }
+              }
+            },
             suppressVisibleSessionEffects,
-            verboseDefault: (resolveAgentConfig(cfg, sessionAgentId)?.verboseDefault ??
-              agentCfg?.verboseDefault) as VerboseLevel | undefined,
-            sessionStateActor,
-            ...(manifestMetadataSnapshot
-              ? { pluginMetadataSnapshot: manifestMetadataSnapshot }
-              : {}),
-          }),
-        { config: cfg },
-      );
-      ({ sessionEntry, opts } = embeddedSessionState);
-      const { requestedThinkLevel, runContext } = embeddedSessionState;
-
-      const modelSelection = await measureAgentStartup(
-        "model-selection",
-        () =>
-          resolveEmbeddedModelSelection({
-            ...preparedContext,
+            preserveUserFacingSessionModelState,
+            modelSelection,
+            embeddedSessionState,
+            trackInternalModelRunTarget,
+            preparedRunAdmission,
+          });
+          if (embeddedAttempt.fallbackExhausted) {
+            opts.onModelFallbackExhausted?.();
+          }
+          sessionEntry = embeddedAttempt.sessionEntry;
+          lifecycleGeneration = embeddedAttempt.lifecycleGeneration;
+          const finalized = await finalizeEmbeddedAgentCommand({
+            admittedDeliverySource: preparedRunAdmission.finalDeliverySource,
+            prepared: attemptPrepared,
             opts,
+            deps: resolvedDeps,
+            runtime,
             sessionEntry,
-            requestedThinkLevel,
+            attempt: embeddedAttempt,
+            embeddedSessionState,
             suppressVisibleSessionEffects,
-            runContext,
-          }),
-        { config: cfg },
-      );
-      sessionEntry = modelSelection.sessionEntry;
-      const { prepared: attemptPrepared, admission } = await prepareCommandForegroundRun({
-        prepared,
-        opts,
-        sessionEntry,
-        embeddedSessionState,
-        modelSelection,
-        lifecycleGeneration,
-        ingress: admissionIngress,
-        suppressVisibleSessionEffects,
-        onCommittedSessionId: (committedSessionId) => {
-          runOwnedSessionId = committedSessionId;
-          recordCompactionSessionId(committedSessionId);
+            preserveUserFacingSessionModelState,
+            currentRunDeliveryContext,
+            sessionOwnership: { runOwnedSessionId, sessionReboundDuringRun },
+            onSessionOwnershipChanged: (ownership, committedCompactionSessionId) => {
+              runOwnedSessionId = ownership.runOwnedSessionId;
+              sessionReboundDuringRun = ownership.sessionReboundDuringRun;
+              if (committedCompactionSessionId) {
+                recordCompactionSessionId(committedCompactionSessionId);
+              }
+            },
+          });
+          sessionEntry = finalized.sessionEntry;
+          runOwnedSessionId = finalized.runOwnedSessionId;
+          sessionReboundDuringRun = finalized.sessionReboundDuringRun;
+          maintenanceRequest = finalized.maintenance;
+          return finalized.deliveryResult;
         },
-      });
-      preparedRunAdmission = admission;
-      sessionEntry = attemptPrepared.sessionEntry;
-      if (attemptPrepared.sessionId !== runOwnedSessionId) {
-        runOwnedSessionId = attemptPrepared.sessionId;
-        recordCompactionSessionId(runOwnedSessionId);
-      }
-      const embeddedAttempt = await runEmbeddedAgentAttempt({
-        prepared: attemptPrepared,
-        opts,
-        sessionEntry,
-        lifecycleGeneration,
-        onLifecycleGenerationChanged: (nextLifecycleGeneration) => {
-          lifecycleGeneration = nextLifecycleGeneration;
-        },
-        onCompactionAccounting: (fact) => {
-          if (fact.kind === "durable") {
-            runOwnedSessionId = fact.target.sessionId;
-            if (fact.previousSessionId !== undefined) {
-              recordCompactionSessionId(fact.target.sessionId);
-            }
-          }
-        },
-        suppressVisibleSessionEffects,
-        preserveUserFacingSessionModelState,
-        modelSelection,
-        embeddedSessionState,
-        trackInternalModelRunTarget,
-        preparedRunAdmission,
-      });
-      if (embeddedAttempt.fallbackExhausted) {
-        opts.onModelFallbackExhausted?.();
-      }
-      sessionEntry = embeddedAttempt.sessionEntry;
-      lifecycleGeneration = embeddedAttempt.lifecycleGeneration;
-      const finalized = await finalizeEmbeddedAgentCommand({
-        admittedDeliverySource: preparedRunAdmission.finalDeliverySource,
-        prepared: attemptPrepared,
-        opts,
-        deps: resolvedDeps,
-        runtime,
-        sessionEntry,
-        attempt: embeddedAttempt,
-        embeddedSessionState,
-        suppressVisibleSessionEffects,
-        preserveUserFacingSessionModelState,
-        currentRunDeliveryContext,
-        sessionOwnership: { runOwnedSessionId, sessionReboundDuringRun },
-        onSessionOwnershipChanged: (ownership, committedCompactionSessionId) => {
-          runOwnedSessionId = ownership.runOwnedSessionId;
-          sessionReboundDuringRun = ownership.sessionReboundDuringRun;
-          if (committedCompactionSessionId) {
-            recordCompactionSessionId(committedCompactionSessionId);
-          }
-        },
-      });
-      sessionEntry = finalized.sessionEntry;
-      runOwnedSessionId = finalized.runOwnedSessionId;
-      sessionReboundDuringRun = finalized.sessionReboundDuringRun;
-      maintenanceRequest = finalized.maintenance;
-      return finalized.deliveryResult;
-    });
+      ),
+    );
   } catch (error) {
     commandError = error;
     throw error;

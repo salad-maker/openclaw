@@ -127,6 +127,12 @@ export function createDeferredGatewaySubagentRuntime(
     runForkedTurn: (params) => runtime.subagent.runForkedTurn(params),
     run: (...args) => runtime.subagent.run(...args),
     waitForRun: (...args) => runtime.subagent.waitForRun(...args),
+    get getRun() {
+      return runtime.subagent.getRun;
+    },
+    get cancelRun() {
+      return runtime.subagent.cancelRun;
+    },
     getSessionMessages: (...args) => runtime.subagent.getSessionMessages(...args),
     deleteSession: (...args) => runtime.subagent.deleteSession(...args),
   };

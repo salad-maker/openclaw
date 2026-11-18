@@ -20,6 +20,7 @@ import {
   readRunOperatorAuthority,
   resolveAdmittedRunActiveAssertion,
 } from "../admitted-run-context.js";
+import { assertAgentToolExecutionHarness } from "../agent-tool-source-execution-guard.js";
 import {
   isHostScopedAgentToolActive,
   runWithAgentRingZeroTools,
@@ -537,6 +538,7 @@ async function runAgentHarnessOperation<T>(
 ): Promise<T> {
   const builtIn = isBuiltInOpenClawAgentHarness(harness);
   // Embedded prompt assembly refreshes this at consumption; plugin host capabilities need it here.
+  assertAgentToolExecutionHarness(builtIn);
   if (!builtIn) {
     await prepareActiveNodeContext(readRunOperatorAuthority(params)?.profileId);
   }

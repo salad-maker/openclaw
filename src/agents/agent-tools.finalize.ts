@@ -15,11 +15,16 @@ import {
   finalizeAgentToolAvailability,
 } from "./agent-tool-availability.js";
 import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
+import {
+  hasExactAgentToolExecutionScope,
+  isAgentToolExecutionToolAllowed,
+} from "./agent-tool-source-execution-guard.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import type { HookContext } from "./agent-tools.before-tool-call.types.js";
 import { rewrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.wrapper.js";
 import { applyToolAvailabilityDescriptions } from "./agent-tools.deferred-followup.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import { isCodeModeControlTool } from "./code-mode-control-tools.js";
 
 type PreparedSchema = { parameters: AnyAgentTool["parameters"] };
 type PublishedSchema = { parameters: Record<string, unknown>; prewarmed: Set<string> };
@@ -128,7 +133,14 @@ type FinalizeAgentToolsOptions = {
   recordToolPrepStage?: (name: string) => void;
 };
 
-export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgentTool[] {
+export function finalizeAgentTools(input: FinalizeAgentToolsOptions): AnyAgentTool[] {
+  const exactExecutionScope = hasExactAgentToolExecutionScope();
+  const options = {
+    ...input,
+    tools: input.tools.filter(
+      (tool) => isCodeModeControlTool(tool) || isAgentToolExecutionToolAllowed(tool.name),
+    ),
+  };
   finalizeAgentToolAvailability(options.tools, { beforeNormalization: true });
   const pluginMetadataSnapshot = options.preparedModelRuntime?.metadataSnapshot;
   const memo = pluginMetadataSnapshot
@@ -181,9 +193,10 @@ export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgent
       ? options.hookContext
       : { ...options.hookContext, config: options.config };
   const withHooks =
-    options.wrapBeforeToolCallHook === false
+    !exactExecutionScope && options.wrapBeforeToolCallHook === false
       ? normalized
       : normalized.map((tool) =>
+          !exactExecutionScope &&
           typeof options.wrapBeforeToolCallHook === "function" &&
           !options.wrapBeforeToolCallHook(tool)
             ? tool

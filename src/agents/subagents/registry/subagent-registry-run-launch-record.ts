@@ -42,6 +42,7 @@ export type RegisterSubagentRunParams = {
   taskName?: string;
   requesterAgentId?: string;
   cleanup: "delete" | "keep";
+  retainOutcomeOnKeep?: true;
   label?: string;
   model?: string;
   agentDir?: string;
@@ -110,6 +111,7 @@ export function createSubagentRegistrationRecord(
     task: registerParams.task,
     taskName: registerParams.taskName,
     cleanup: registerParams.cleanup,
+    retainOutcomeOnKeep: registerParams.retainOutcomeOnKeep,
     expectsCompletionMessage: registerParams.expectsCompletionMessage,
     completionTarget: registerParams.completionTarget,
     completionRequesterSessionId: registerParams.completionRequesterSessionId,

@@ -1,17 +1,3 @@
-/**
- * Builds one turn's tool list and records restrictions for work it can create.
- *
- * 1. Resolve the turn's identity, workspace and policy. For a child, this policy
- *    already includes restrictions inherited from its parent.
- * 2. Assemble coding, Gateway, channel and plugin tools, then apply policy.
- *    Apply deployment policy after ordinary grants so plugins cannot bypass it.
- * 3. Record tool limits for future children and scheduled runs. These records
- *    do not add callable tools to the current turn.
- * 4. Finalize schemas and execution hooks, and bind the Gateway caller identity.
- *
- * Tool factories and policy modules implement each rule; this module orders
- * their application. Sync and async callers share the same assembly.
- */
 import { messageToolOwnsVisibleReply } from "../auto-reply/source-reply-delivery-mode.js";
 import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
 import { readScheduledToolTargets } from "../cron/execution-context-registry.js";
@@ -48,6 +34,24 @@ import {
   getActiveAgentRingZeroTools,
   mergeAgentRingZeroTools,
 } from "./agent-tools.ring-zero-context.js";
+/**
+ * Builds one turn's tool list and records restrictions for work it can create.
+ *
+ * 1. Resolve the turn's identity, workspace and policy. For a child, this policy
+ *    already includes restrictions inherited from its parent.
+ * 2. Assemble coding, Gateway, channel and plugin tools, then apply policy.
+ *    Apply deployment policy after ordinary grants so plugins cannot bypass it.
+ * 3. Record tool limits for future children and scheduled runs. These records
+ *    do not add callable tools to the current turn.
+ * 4. Finalize schemas and execution hooks, and bind the Gateway caller identity.
+ *
+ * Tool factories and policy modules implement each rule; this module orders
+ * their application. Sync and async callers share the same assembly.
+ */
+import {
+  restrictScopedTaskToolConstruction,
+  type PreparedCoreToolSurface,
+} from "./agent-tools.scoped-task.js";
 import { isHostSystemTurn, resolveTurnToolSurface } from "./agent-tools.turn-authority.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { resolveAutomationsRunScope } from "./automations-run-scope.js";
@@ -88,12 +92,17 @@ import { prepareSessionPortalToolAccess } from "./tools/session-portal-target.js
 
 // Yield preparation requests so sync and async entry points keep the same policy ordering.
 export function* assembleOpenClawCodingTools(
-  options?: InternalCodingToolsOptions,
-  skillReadResources?: SkillSnapshot["resolvedSkills"],
+  inputOptions?: InternalCodingToolsOptions,
+  inputSkillReadResources?: SkillSnapshot["resolvedSkills"],
   onPolicyFilter?: (event: ToolPolicyFilterEvent) => void,
-  preparedSurface?: { tools: AnyAgentTool[]; policy: ReturnType<typeof prepareCoreToolPolicy> },
-  assertLoopbackConfigCurrent = captureLocalBrowserLoopbackConfig(options?.config),
+  inputPreparedSurface?: PreparedCoreToolSurface,
+  assertLoopbackConfigCurrent = captureLocalBrowserLoopbackConfig(inputOptions?.config),
 ): CodingToolAssembly {
+  const { options, skillReadResources, preparedSurface } = restrictScopedTaskToolConstruction(
+    inputOptions,
+    inputSkillReadResources,
+    inputPreparedSurface,
+  );
   const preparedTools = preparedSurface?.tools;
   const listingClientCaps =
     options?.listingClientCaps ?? resolveSessionToolListingClientCaps(options ?? {});

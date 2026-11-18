@@ -27,7 +27,10 @@ import {
   createRegisteredChannelRuntimeResolver,
   createScopedPluginChannelRuntime,
 } from "./registry-runtime-channel.js";
-import { createPluginRuntimeFacades } from "./registry-runtime-facades.js";
+import {
+  createPluginRuntimeFacades,
+  createScopedSubagentMethods,
+} from "./registry-runtime-facades.js";
 import { runPluginForkedTurnAsOwner } from "./registry-runtime-forked-turn.js";
 import { createPluginSystemRuntime } from "./registry-runtime-system.js";
 import type { PluginRegistryState } from "./registry-state.js";
@@ -672,8 +675,6 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                 },
               }
             : {}),
-          complete: (params) => runWithPluginScope(() => subagent.complete(params)),
-          forkSession: (params) => runWithPluginScope(() => subagent.forkSession(params)),
           runForkedTurn: (params) =>
             runPluginForkedTurnAsOwner(params, {
               registry: currentRegistry(),
@@ -692,9 +693,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               return await subagent.run(params);
             });
           },
-          waitForRun: (params) => runWithPluginScope(() => subagent.waitForRun(params)),
-          getSessionMessages: (params) =>
-            runWithPluginScope(() => subagent.getSessionMessages(params)),
+          ...createScopedSubagentMethods(subagent, runWithPluginScope),
           deleteSession: async (params) => {
             const { assertStoredSessionEntryOwned } = await loadSessionOwnership();
             return await runWithPluginScope(async () => {

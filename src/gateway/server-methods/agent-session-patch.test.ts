@@ -25,6 +25,7 @@ function buildCreationPatch(opts: PatchInput) {
   return buildAgentSessionPatch({
     freshEntry: opts.freshEntry,
     initialEntry: opts.freshEntry,
+    pluginOwnerId: opts.pluginOwnerId,
     cfg: {},
     sessionAgentId: "main",
     canonicalSessionKey: "agent:main:incident-42",
@@ -66,6 +67,39 @@ it("retains internal session delivery across channel-less agent turns", async ()
   });
   expect((await buildCreationPatch({})).patch.delivery).toEqual({ kind: "none" });
 });
+
+it("creates an original lifecycle identity for a plugin subagent session", async () => {
+  const { patch } = await buildCreationPatch({
+    canonicalSessionKey: "agent:main:subagent:plugin-worker",
+    pluginOwnerId: "coordination",
+    isSystemGatewayRun: true,
+  });
+  expect(patch).toMatchObject({ sessionId: "fallback", pluginOwnerId: "coordination" });
+  expect(patch.lifecycleRevision).toMatch(/^[0-9a-f-]{36}$/);
+});
+
+it.each(["original-revision", undefined])(
+  "preserves an existing session identity without upgrading legacy authority (%s)",
+  async (lifecycleRevision) => {
+    const entry: SessionEntry = {
+      sessionId: "existing",
+      lifecycleRevision,
+      pluginOwnerId: "original-owner",
+      updatedAt: 1_000,
+    };
+    const { patch } = await buildCreationPatch({
+      freshEntry: entry,
+      pluginOwnerId: "different-owner",
+      isSystemGatewayRun: true,
+    });
+    expect(patch).not.toHaveProperty("lifecycleRevision");
+    expect(mergeSessionEntry(entry, patch)).toMatchObject({
+      sessionId: "existing",
+      lifecycleRevision,
+      pluginOwnerId: "original-owner",
+    });
+  },
+);
 
 it("clears agent status at the next human interaction boundary", async () => {
   const { patch } = await buildCreationPatch({

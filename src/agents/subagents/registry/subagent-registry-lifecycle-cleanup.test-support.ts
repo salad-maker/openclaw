@@ -192,6 +192,54 @@ export function registerDirectSessionCleanupAuthorityTests({
     callGateway: Mock<(options: CallGatewayOptions) => Promise<Record<string, unknown>>>;
   };
 }) {
+  it.each([
+    { cleanup: "keep", retainOutcomeOnKeep: true, retained: true },
+    { cleanup: "keep", retainOutcomeOnKeep: undefined, retained: false },
+    { cleanup: "delete", retainOutcomeOnKeep: true, retained: false },
+    { cleanup: "delete", retainOutcomeOnKeep: true, retained: false, cron: true },
+  ] as const)(
+    "settles killed cleanup without losing retained outcomes ($cleanup, $retainOutcomeOnKeep, cron=$cron)",
+    async (scenario) => {
+      const { cleanup, retainOutcomeOnKeep, retained } = scenario;
+      // The kill reconciler has finished its grace period and removed suppression.
+      // Plugin result readers still need this native outcome after cleanup/restart.
+      const entry = createRunEntry({
+        cleanup,
+        retainOutcomeOnKeep,
+        ...("cron" in scenario ? { requesterSessionKey: "agent:main:cron:job:run:one" } : {}),
+        expectsCompletionMessage: false,
+        endedAt: 4_000,
+        endedReason: ended.SUBAGENT_ENDED_REASON_KILLED,
+        outcome: { status: "error", error: "agent run aborted" },
+      });
+      const runs = new Map([[entry.runId, entry]]);
+      const controller = createLifecycleController({ entry, runs });
+      const join = observeRootWork();
+      try {
+        await controller.completeCleanupBookkeeping({
+          entry,
+          runId: entry.runId,
+          completedAt: 5_000,
+          cleanup,
+          preserveTranscript: true,
+          skipRequesterSettleWake: true,
+        });
+        await join();
+        expect(runs.has(entry.runId)).toBe(retained);
+        if (retained) {
+          expect(runs.get(entry.runId)).toMatchObject({
+            endedReason: ended.SUBAGENT_ENDED_REASON_KILLED,
+            cleanupCompletedAt: 5_000,
+            execution: { status: "terminal", endedAt: 4_000 },
+          });
+        }
+      } finally {
+        controller.clearRuntimeState();
+        await join();
+      }
+    },
+  );
+
   it("preserves a delivered receipt while cleaning up a suppressed completion", async () => {
     const entry = createRunEntry({
       endedAt: 4_000,

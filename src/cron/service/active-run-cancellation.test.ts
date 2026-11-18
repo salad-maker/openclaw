@@ -9,6 +9,7 @@ import {
 import {
   abortActiveCronTaskRuns,
   getSuspensionVisibleCronTaskRunCount,
+  hasUnsettledCronTaskRunForJob,
   registerActiveCronTaskRun,
   retireActiveCronTaskRunTracking,
   trackActiveCronTaskRunSettlement,
@@ -58,6 +59,30 @@ afterEach(async () => {
   }
 });
 
+it("retains exact owned-job settlement after cancellation acknowledgement and drain retirement", async () => {
+  vi.useFakeTimers();
+  resetActiveCronTaskRunsForTests();
+  const core = createDeferred();
+  const controller = new AbortController();
+  const marker = markCronJobActive("owned");
+  trackActiveCronTaskRunSettlement(core.promise, controller.signal, "main", "owned");
+  try {
+    controller.abort();
+    clearCronJobActive("owned", marker);
+    await vi.advanceTimersByTimeAsync(CRON_TASK_RUN_SETTLEMENT_TRACKING_MAX_MS + 1);
+    retireActiveCronTaskRunTracking();
+    expect(hasUnsettledCronTaskRunForJob("owned")).toBe(true);
+    expect(hasUnsettledCronTaskRunForJob("unrelated")).toBe(false);
+    core.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(hasUnsettledCronTaskRunForJob("owned")).toBe(false);
+  } finally {
+    core.resolve();
+    await Promise.allSettled([core.promise]);
+    vi.useRealTimers();
+    resetActiveCronTaskRunsForTests();
+  }
+});
 it("keeps a removed agent's unsettled core visible after cancellation and restart retirement", async () => {
   const controller = new AbortController();
   const removed = core(controller.signal, "removed");

@@ -375,6 +375,7 @@ export function applyJobResult(
         job.state.nextRunAtMs = undefined;
       } else if (result.status === "error") {
         const retryDecision = resolveTransientCronRetryDecision({
+          ...((job as CronStoredJob).pluginSchedule ? { maxTransientRetries: 0 } : {}),
           error: result.error,
           errorClassification: result.errorClassification,
           lastErrorReason: job.state.lastErrorReason,

@@ -10,6 +10,7 @@ import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-sta
 import { resolveSessionAgentIdStrict } from "../agent-scope.js";
 import { prepareGitHubToolEnvironment } from "../github-tool-identity.js";
 import { resolveExecToolConfig } from "../lazy-exec-tool.js";
+import { readScopedTaskWorkspaceAuthority } from "../sandbox/scoped-task-workspace.js";
 
 const MAX_NATIVE_OPERATION_CWD_BYTES = 4096;
 
@@ -58,10 +59,12 @@ export function prepareAgentHarnessEnvironment(params: {
     applyPathPrepend(localToolEnv, [...localToolPathPrepend]);
     Object.freeze(localToolEnv);
   }
+  const agentId = resolveSessionAgentIdStrict(params);
+  const scopedTask = readScopedTaskWorkspaceAuthority({ agentId, sessionKey: params.sessionKey });
   const identity = prepareGitHubToolEnvironment({
-    config: params.config ?? {},
-    sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig,
-    agentId: resolveSessionAgentIdStrict(params),
+    config: scopedTask ? {} : (params.config ?? {}),
+    sourceConfig: scopedTask ? {} : getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig,
+    agentId,
   });
   const localProcessEnv = installationTargetEnv(params.installationTarget);
   return Object.freeze({

@@ -57,6 +57,7 @@ import { resolveAgentConfig } from "../agent-scope-config.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { auditSandboxToolPolicyBlock, escapeControlCharsVisible } from "../tool-policy-audit.js";
 import { resolveSandboxRuntimeSettings } from "./config.js";
+import { readScopedTaskWorkspaceAuthority } from "./scoped-task-workspace.js";
 import {
   classifyToolAgainstSandboxToolPolicy,
   resolveSandboxToolPolicyForAgent,
@@ -597,15 +598,23 @@ function resolveSandboxRuntimeStatusForClassification(
           }
         : undefined;
   const sandboxRequired = session?.existing?.sandbox === "required";
+  const scopedTaskConfig = readScopedTaskWorkspaceAuthority({
+    agentId: classificationAgentId,
+    sessionKey: comparableSessionKey,
+  });
   const profileId = sessionIsolationProfileId(session?.existing?.createdActor)?.trim();
   const isolation: SandboxRuntimeIsolation = sandboxRequired
     ? {
         sandboxRequired: true,
         createdActor: session.existing?.createdActor,
-        isolationSubject: profileId
-          ? { kind: "profile", profileId }
-          : { kind: "session", sessionKey: session.normalizedKey },
-        workspaceAccess: sandboxCfg.workspaceAccess === "rw" ? "ro" : sandboxCfg.workspaceAccess,
+        isolationSubject: scopedTaskConfig
+          ? { kind: "session", sessionKey: session.normalizedKey }
+          : profileId
+            ? { kind: "profile", profileId }
+            : { kind: "session", sessionKey: session.normalizedKey },
+        workspaceAccess:
+          scopedTaskConfig?.workspaceAccess ??
+          (sandboxCfg.workspaceAccess === "rw" ? "ro" : sandboxCfg.workspaceAccess),
       }
     : { sandboxRequired: false };
   const sandboxed =

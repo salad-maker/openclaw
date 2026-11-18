@@ -273,6 +273,8 @@ export async function registerPluginSubagentRunFromGateway(params: {
           workspaceDir: sessionEntry?.spawnedWorkspaceDir,
           cwd: sessionEntry?.spawnedCwd,
         }) ?? params.workspaceDir,
+      // Owned SDK readers reconcile cancellation after native cleanup and restart.
+      retainOutcomeOnKeep: params.pluginId ? true : undefined,
       ...(params.pluginId ? { label: `plugin:${params.pluginId}` } : {}),
       expectsCompletionMessage: params.requester !== undefined,
       spawnMode: "run",

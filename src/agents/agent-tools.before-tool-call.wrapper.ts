@@ -240,7 +240,9 @@ export function wrapToolWithBeforeToolCallHook(
   }
   const toolName = tool.name || "tool";
   const toolOwnerPluginId = getPluginToolMeta(tool)?.pluginId;
-  const admitExecution = captureAgentToolExecutionBudget();
+  const admitExecution = captureAgentToolExecutionBudget(toolName, {
+    control: isCodeModeControlTool(tool),
+  });
   const diagnosticIdentity = resolveToolDiagnosticIdentity(tool);
   const hookOptions: BeforeToolCallDiagnosticOptions = {
     ...options,

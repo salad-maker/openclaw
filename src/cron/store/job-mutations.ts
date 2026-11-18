@@ -8,6 +8,7 @@ import {
   isPluginCommandScheduleCapPeer,
   MAX_ACTIVE_PLUGIN_COMMAND_SCHEDULES_PER_PARENT,
 } from "../plugin-command-schedule.js";
+import { pluginScheduleDefinition } from "../plugin-schedule-definition.js";
 import { toPublicCronJob } from "../public-job.js";
 import { declarativeFields } from "../service/jobs-declarative.js";
 import {
@@ -215,6 +216,12 @@ export function planCronJobMutation(
               sourceDigest: options.pluginCommandSourceDigest,
             };
           }
+        }
+        if (options.pluginSchedule) {
+          nextJob.pluginSchedule = {
+            ...structuredClone(options.pluginSchedule),
+            definition: pluginScheduleDefinition(nextJob),
+          };
         }
         if (options.createdActor) {
           nextJob.createdActor = options.createdActor;

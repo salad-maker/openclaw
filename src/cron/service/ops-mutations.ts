@@ -139,6 +139,7 @@ export async function add(
         pluginCommandSourceDigest: opts?.pluginCommandSourceDigest,
         streamSandbox: opts?.streamSandbox,
         streamOperatorSource: opts?.streamOperatorSource,
+        pluginSchedule: opts?.pluginSchedule,
         enabledExplicit: opts?.enabledExplicit,
         systemOwned: opts?.systemOwned,
         createdActor: opts?.createdActor,
